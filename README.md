@@ -1,6 +1,7 @@
 # 咕咕 (Gugu) — macOS 桌面生命体
 
 一只由大模型驱动、活在你桌面上的小鸟。它感知你的工作节奏、记得你们的相处、会说短而准的话,并随相处逐步成长。
+<img width="462" height="260" alt="image" src="https://github.com/user-attachments/assets/0aed76b5-a46e-45a6-8fd9-23b01dd6c7d0" />
 
 ## 快速开始
 
