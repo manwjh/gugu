@@ -1,0 +1,7 @@
+.DS_Store
+.build/
+Gugu.app/
+*.dSYM/
+dist/
+DerivedData/
+*.log
