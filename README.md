@@ -57,7 +57,7 @@ pkill -f gugu/.build     # run.sh 开发模式
 
 ## 模型
 
-走 `config.yaml` 里的中转通道。心跳用 `models.instinct_id`,对话用 `models.conversation_id`,梦境用 `models.dream_id`。默认值会在首次启动时写入配置,可直接编辑后热加载。
+走 `config.yaml` 里的中转通道。三层默认共用 `model.id` 这一个模型;需要分层时再用 `model.instinct_id`(心跳)、`model.conversation_id`(对话)、`model.dream_id`(梦境)按层覆盖,留空即回落到 `model.id`。默认值会在首次启动时写入配置,可直接编辑后热加载。
 
 ## 调试命令
 
@@ -75,11 +75,13 @@ GUGU_HOME=/private/tmp/gugu-offline ./.build/debug/gugu --selftest-offline
 ## 架构(五层)
 
 ```
-L0 反射  本地·0成本  身体/物理/动画/对光标和拖拽的即时反应
-L1 感知  本地·0成本  键鼠节奏 + 前台App,产出文字事件(原始数据不出本机)
-L2 直觉  Haiku       攒够好奇心才心跳一次,返回 心情/动作/一句话
-L3 思考  Sonnet      你主动对话时
-L4 梦境  Haiku       每晚整理记忆、生长技能、结算成长,可选 Batch
+L0 反射  本地·0成本   身体/物理/动画/对光标和拖拽的即时反应
+L1 感知  本地·0成本   键鼠节奏 + 前台App,产出文字事件(原始数据不出本机)
+L2 直觉  instinct 层  攒够好奇心才心跳一次,返回 心情/动作/一句话
+L3 思考  conversation 层  你主动对话时(预算吃紧会降档到 instinct 层)
+L4 梦境  dream 层     每晚整理记忆、生长技能、结算成长,可选 Batch
 ```
+
+L2/L3/L4 三层默认共用 `model.id` 一个模型,可按层覆盖(见上文「模型」)。设计书里的目标分配是 L2/L4 用 Haiku、L3 用 Sonnet,但当前不写死型号。
 
 设计书全文见仓库内的 `GUGU-DESIGN.md`。
