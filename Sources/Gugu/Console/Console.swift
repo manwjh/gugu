@@ -446,6 +446,7 @@ final class Console: NSObject, NSWindowDelegate {
         setChatLoading(true)
         EventBus.shared.post(kind: "chat", summary: "主人和你聊天:\(String(text.prefix(40)))", weight: 0)
         app.affect.chatted()
+        PetState.recordBondGain(Affect.bondGainChatted)
         if app.pet.isSleeping { app.pet.wake() }
         if let local = app.brain.handleLocalCommand(text) {
             if local.action != "idle" {

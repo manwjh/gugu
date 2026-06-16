@@ -504,6 +504,14 @@ struct PetState: Codable {
         let data = try encoder.encode(self)
         try data.write(to: Paths.state, options: .atomic)
     }
+
+    /// Apply a small long-term bond increment and persist. PetState.bond is the
+    /// single source of truth for bond (Affect no longer holds a copy).
+    static func recordBondGain(_ delta: Double) {
+        var state = load()
+        state.bond = min(1, state.bond + delta)
+        state.save()
+    }
 }
 
 private extension String {

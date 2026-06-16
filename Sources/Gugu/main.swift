@@ -24,7 +24,6 @@ final class GuguApp: NSObject, NSApplicationDelegate {
         budget = Budget(dailyTokens: GrowthStage.adjustedDailyTokens(base: config.dailyTokens,
                                                                      stage: GrowthStage(rawStage: state.stage)))
         affect = Affect()
-        affect.bond = state.bond
 
         brain = Brain(config: config, budget: budget)
         rhythmSensor = RhythmSensor()
@@ -125,7 +124,10 @@ final class GuguApp: NSObject, NSApplicationDelegate {
             guard let self else { return }
             self.affect.petted()
             EventBus.shared.post(kind: "petted", summary: "主人摸了摸你", weight: 22)
-            var state = PetState.load(); state.interactions += 1; state.bond = self.affect.bond; state.save()
+            var state = PetState.load()
+            state.interactions += 1
+            state.bond = min(1, state.bond + Affect.bondGainPetted)
+            state.save()
         }
         pet.onThrown = { [weak self] in
             guard let self else { return }
@@ -232,6 +234,7 @@ final class GuguApp: NSObject, NSApplicationDelegate {
         guard !trimmed.isEmpty else { return }
         EventBus.shared.post(kind: "voice", summary: "主人对你说:\(String(trimmed.prefix(40)))", weight: 0)
         affect.chatted()
+        PetState.recordBondGain(Affect.bondGainChatted)
         if pet.isSleeping { pet.wake() }
         pet.bird.tiltHead(true)
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in self?.pet.bird.tiltHead(false) }

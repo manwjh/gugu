@@ -353,8 +353,9 @@ arousal  烦躁/突发事件拉高                       → 退多远
 ③ 调制行为。**记仇与和好**是本地规则:被摔 → valence 锁低 30 分钟、躲着你;摸两下提前和好。
 `isSleepyTime`(约 02:00–07:00)驱动夜间睡眠。
 
-> 🟡 `Affect.bond` 与 `PetState.bond` 是两处存储,靠 main.swift 在摸/读时手动同步,
-> 存在不一致风险(待统一为单一来源)。
+bond(羁绊)是唯一的长期标量,**单一真值存在 PetState(state.json)**;Affect 只持有
+energy/valence/arousal 短期标量,并通过 `bondGainPetted/Chatted` 常量给出每次互动的增量,
+由交互点经 `PetState.recordBondGain` 持久化——抚摸与聊天积累的羁绊不再丢失。
 
 ---
 
