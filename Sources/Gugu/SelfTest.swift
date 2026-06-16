@@ -342,6 +342,19 @@ func runOfflineSelfTest() {
         check("memory.digest", digest.contains("主人") && digest.contains("近况") && digest.contains("我"),
               "digest=「\(digest.prefix(80))」")
 
+        // bond.md milestones (append-only) flow into the heartbeat digest
+        do {
+            let bondURL = Paths.memoryDir.appendingPathComponent("bond.md")
+            try "- 第一次见面,主人歪头看了看我。\n- 主人批准咕咕长成了雏鸟。\n"
+                .write(to: bondURL, atomically: true, encoding: .utf8)
+            let withBond = memory.digest()
+            check("memory.bond_digest",
+                  withBond.contains("一起经历") && withBond.contains("长成了雏鸟"),
+                  "digest=「\(withBond.suffix(80))」")
+        } catch {
+            check("memory.bond_digest", false, "\(error)")
+        }
+
         do {
             let capture1 = try memory.applyPinnedFact(.ownerName(name: "王哥", preferred: true),
                                                       source: "offline-test",

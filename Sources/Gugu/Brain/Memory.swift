@@ -40,8 +40,24 @@ final class Memory {
                 parts.append("\(name):\(t.trimmingCharacters(in: .whitespacesAndNewlines))")
             }
         }
+        let milestones = recentBondMilestones()
+        if !milestones.isEmpty { parts.append("你们一起经历的事:\(milestones)") }
         let joined = parts.joined(separator: "\n")
         return String(joined.prefix(maxChars))
+    }
+
+    /// The most recent append-only milestones from bond.md (newest last in file),
+    /// so the pet remembers shared history (e.g. evolutions) without bloating the
+    /// prompt with the full ever-growing log.
+    func recentBondMilestones(limit: Int = 3) -> String {
+        let url = Paths.memoryDir.appendingPathComponent("bond.md")
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return "" }
+        let lines = text
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: " -*\t")) }
+            .filter { !$0.isEmpty }
+        guard !lines.isEmpty else { return "" }
+        return lines.suffix(limit).joined(separator: ";")
     }
 
     func pinnedDigest() -> String {
