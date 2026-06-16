@@ -143,6 +143,17 @@ func runOfflineSelfTest() {
         check("paths.models",
               FileManager.default.fileExists(atPath: Paths.modelsDir.path),
               Paths.modelsDir.path)
+        do {
+            // optional object model: missing is a clean, guided state
+            let readme = Paths.modelsDir.appendingPathComponent("README.txt")
+            let readmeText = (try? String(contentsOf: readme, encoding: .utf8)) ?? ""
+            let vision = VisionSensor()
+            let guided = FileManager.default.fileExists(atPath: readme.path)
+                && readmeText.contains("gugu-objects.mlmodelc")
+                && !vision.objectRecognitionAvailable   // no model installed → must not claim availability
+            check("vision.object_model_guidance", guided,
+                  "available=\(vision.objectRecognitionAvailable)")
+        }
         let initialStage = GrowthStage(rawStage: PetState.load().stage)
         check("growth.initial",
               initialStage == .hatchling,

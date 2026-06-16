@@ -808,6 +808,14 @@ private final class LocalObjectRecognizer: @unchecked Sendable {
     init() {
         let modelURL = Paths.modelsDir.appendingPathComponent("gugu-objects.mlmodelc")
         guard FileManager.default.fileExists(atPath: modelURL.path) else {
+            // Not installed is a normal, expected state — object recognition stays
+            // off and the pet never claims to see specific objects. Record it so
+            // the audit page can guide the owner on how to enable it.
+            Log.info("vision", "未安装本地物品识别模型(可选);把编译好的模型放到 \(modelURL.path) 即可启用")
+            Audit.record(kind: "vision.object_model",
+                         summary: "本地物品识别未启用:未安装模型(可选功能)",
+                         detail: ["expected_path": modelURL.path,
+                                  "how_to_enable": "把编译好的 Core ML 模型命名为 gugu-objects.mlmodelc 放入 models/ 目录"])
             return
         }
         do {
@@ -817,8 +825,13 @@ private final class LocalObjectRecognizer: @unchecked Sendable {
             let visionModel = try VNCoreMLModel(for: model)
             self.model = visionModel
             Log.info("vision", "本地物品识别模型已加载:\(modelURL.path)")
+            Audit.record(kind: "vision.object_model", summary: "本地物品识别已启用",
+                         detail: ["path": modelURL.path])
         } catch {
             Log.info("vision", "本地物品识别模型加载失败:\(error)")
+            Audit.record(kind: "vision.object_model",
+                         summary: "本地物品识别未启用:模型加载失败",
+                         detail: ["path": modelURL.path, "error": "\(error)"])
         }
     }
 
