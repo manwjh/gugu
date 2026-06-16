@@ -82,6 +82,6 @@ L3 思考  conversation 层  你主动对话时(预算吃紧会降档到 instinc
 L4 梦境  dream 层     每晚整理记忆、生长技能、结算成长,可选 Batch
 ```
 
-L2/L3/L4 三层默认共用 `model.id` 一个模型,可按层覆盖(见上文「模型」)。设计书里的目标分配是 L2/L4 用 Haiku、L3 用 Sonnet,但当前不写死型号。
+L2/L3/L4 三层默认共用 `model.id` 一个模型(出厂为 `deepseek-v4-flash`),需要时可按层覆盖(见上文「模型」)。
 
 设计书全文见仓库内的 `GUGU-DESIGN.md`。
