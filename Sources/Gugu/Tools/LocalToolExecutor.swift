@@ -145,10 +145,22 @@ struct LocalToolExecutor {
         ]
         if !cleanDue.isEmpty { record["due"] = cleanDue }
         try appendJSONLine(record, to: url, tool: tool)
-        if config.toolLocalNotifications && cleanDue.isEmpty {
-            LocalNotifier.notify(title: "咕咕提醒事项", body: cleanText)
+
+        var scheduledMessage = cleanDue.isEmpty ? "已记录提醒事项" : "已记录提醒事项(\(cleanDue))"
+        if config.toolLocalNotifications {
+            if cleanDue.isEmpty {
+                LocalNotifier.notify(title: "咕咕提醒事项", body: cleanText)
+            } else if let fireDate = DueDateParser.parse(cleanDue) {
+                LocalNotifier.schedule(title: "咕咕提醒事项", body: cleanText, at: fireDate)
+                let fmt = DateFormatter()
+                fmt.dateFormat = "M月d日 HH:mm"
+                scheduledMessage = "已记录提醒事项,会在 \(fmt.string(from: fireDate)) 提醒你"
+            } else {
+                // due present but unparseable — don't silently drop it
+                LocalNotifier.notify(title: "咕咕提醒事项", body: cleanText)
+            }
         }
-        return allowed(tool: tool, message: cleanDue.isEmpty ? "已记录提醒事项" : "已记录提醒事项(\(cleanDue))", id: id, file: url)
+        return allowed(tool: tool, message: scheduledMessage, id: id, file: url)
     }
 
     func requestWebSearch(query: String, reason: String? = nil) throws -> Result {

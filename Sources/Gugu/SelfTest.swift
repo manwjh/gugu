@@ -248,6 +248,29 @@ func runOfflineSelfTest() {
         check("local_command.reminder",
               reminder?.kind == .reminder && reminder?.dueText == "明天",
               "reminder parser")
+
+        // DueDateParser: fuzzy time words → concrete fire time (deterministic).
+        do {
+            var cal = Calendar(identifier: .gregorian)
+            cal.timeZone = TimeZone(identifier: "Asia/Shanghai") ?? .current
+            // Reference: 2026-06-15 (Monday) 10:00
+            var refComps = DateComponents()
+            refComps.year = 2026; refComps.month = 6; refComps.day = 15
+            refComps.hour = 10; refComps.minute = 0
+            let now = cal.date(from: refComps)!
+            func hm(_ d: Date?) -> (Int, Int, Int)? {
+                guard let d else { return nil }
+                let c = cal.dateComponents([.day, .hour, .minute], from: d)
+                return (c.day!, c.hour!, c.minute!)
+            }
+            let tomorrow = hm(DueDateParser.parse("明天", now: now, calendar: cal))
+            let tonight = hm(DueDateParser.parse("今晚", now: now, calendar: cal))
+            let wed = hm(DueDateParser.parse("周三", now: now, calendar: cal))
+            let ok = tomorrow! == (16, 9, 0)   // 次日 09:00
+                && tonight! == (15, 20, 0)     // 当天 20:00
+                && wed! == (17, 9, 0)          // 本周三(6/17) 09:00
+            check("due_date.parse", ok, "明天=\(tomorrow!) 今晚=\(tonight!) 周三=\(wed!)")
+        }
         check("local_command.research",
               LocalCommandParser.parse("咕咕,帮我研究 SwiftData 离线存储")?.kind == .research,
               "research parser")
