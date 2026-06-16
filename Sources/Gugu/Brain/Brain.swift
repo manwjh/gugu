@@ -472,6 +472,7 @@ final class Brain {
             skillName = name
         }
         try memory.clearNotes(for: date)
+        memory.pruneStaleSkills()   // use-it-or-lose-it: forget long-unused skills
 
         let settlement = Evolution(memory: memory).settleAfterDream(
             state: PetState.load(),

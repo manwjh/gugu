@@ -318,7 +318,9 @@ instinct 层(`Brain.chat` 内切换),并压低 max_tokens。
 进化等大事由 `Evolution.appendBond` 写入 bond.md;`digest()` 取最近 3 条附进心跳,
 让咕咕记得"你们一起经历过什么",又不让只增的日志撑爆 prompt。
 
-> 🟡 遗忘机制部分:旧 notes 在梦境后清除,但 skills 无过期/修剪逻辑。
+遗忘机制:旧 notes 在梦境后清除;skills **用进废退**——`activeSkills` 命中即刷新
+该技能的"最后用到时间"(文件 mtime),梦境时 `pruneStaleSkills` 删除超过 60 天没被
+激活也没被修订的技能,符合"小动物记性"。
 
 ### 5.2 梦境任务(每晚 03:00–05:00,错过则醒后补做)
 

@@ -256,10 +256,41 @@ final class Memory {
             if name.contains("烦躁") && rhythm == .agitated { match = true }
             if match, let body = try? String(contentsOf: f, encoding: .utf8) {
                 hits.append("[\(name)] \(body.trimmingCharacters(in: .whitespacesAndNewlines).prefix(120))")
+                touchSkill(f)   // activation keeps a skill alive (use-it-or-lose-it)
             }
             if hits.count >= 2 { break }
         }
         return hits
+    }
+
+    /// Mark a skill as just-used by bumping its modification date. Pruning uses
+    /// this timestamp, so activation (or a dream revision) resets the clock.
+    private func touchSkill(_ url: URL) {
+        try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: url.path)
+    }
+
+    /// Forget skills not activated or revised within `olderThanDays`. Returns the
+    /// names dropped. Use-it-or-lose-it: a skill the pet keeps using stays;
+    /// one it never reaches for fades, matching a small animal's memory.
+    @discardableResult
+    func pruneStaleSkills(olderThanDays days: Int = 60, now: Date = Date()) -> [String] {
+        let fm = FileManager.default
+        guard let files = try? fm.contentsOfDirectory(at: Paths.skillsDir,
+                                                      includingPropertiesForKeys: [.contentModificationDateKey]) else { return [] }
+        let cutoff = now.addingTimeInterval(-Double(days) * 86400)
+        var dropped: [String] = []
+        for f in files where f.pathExtension == "md" {
+            let modified = (try? f.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? now
+            guard modified < cutoff else { continue }
+            let name = f.deletingPathExtension().lastPathComponent
+            if (try? fm.removeItem(at: f)) != nil {
+                dropped.append(name)
+                Audit.record(kind: "memory.skill_pruned", summary: "遗忘了很久没用到的经验:\(name)",
+                             detail: ["file": f.lastPathComponent,
+                                      "last_used": ISO8601DateFormatter().string(from: modified)])
+            }
+        }
+        return dropped
     }
 
     func addSkill(name: String, body: String) {

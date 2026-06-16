@@ -438,6 +438,21 @@ func runOfflineSelfTest() {
         check("skills", skills.contains { $0.contains("深夜离线自测") } || memory.skillCount() > 0,
               "skill_count=\(memory.skillCount())")
 
+        // use-it-or-lose-it: a long-unused skill is pruned, a fresh one survives
+        do {
+            memory.addSkill(name: "陈年旧经验", body: "很久没用到的经验。")
+            memory.addSkill(name: "新鲜经验", body: "最近还在用的经验。")
+            let staleURL = Paths.skillsDir.appendingPathComponent("陈年旧经验.md")
+            let longAgo = Date().addingTimeInterval(-90 * 86400)   // 90 天前
+            try? FileManager.default.setAttributes([.modificationDate: longAgo], ofItemAtPath: staleURL.path)
+            let dropped = memory.pruneStaleSkills(olderThanDays: 60)
+            let fm = FileManager.default
+            let staleGone = !fm.fileExists(atPath: staleURL.path)
+            let freshKept = fm.fileExists(atPath: Paths.skillsDir.appendingPathComponent("新鲜经验.md").path)
+            check("skills.prune", dropped.contains("陈年旧经验") && staleGone && freshKept,
+                  "dropped=\(dropped)")
+        }
+
         var state = PetState.load()
         let oldInteractions = state.interactions
         state.interactions += 1
