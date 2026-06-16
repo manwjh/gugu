@@ -40,6 +40,7 @@ final class AutonomyTaskQueue {
         case taskNotPending(String)
         case storageReadFailed(String)
         case storageWriteFailed(String)
+        case runnerFailed(String)
 
         var description: String {
             switch self {
@@ -49,6 +50,7 @@ final class AutonomyTaskQueue {
             case .taskNotPending(let id): return "task is not pending: \(id)"
             case .storageReadFailed(let message): return "failed to read autonomy task queue: \(message)"
             case .storageWriteFailed(let message): return "failed to write autonomy task queue: \(message)"
+            case .runnerFailed(let message): return message
             }
         }
     }
@@ -177,6 +179,34 @@ final class AutonomyTaskQueue {
             return task.body.isEmpty ? "离线提醒:\(task.title)" : "离线提醒:\(task.title)\n\(task.body)"
         case .research:
             return task.body.isEmpty ? "已记录待研究请求:\(task.title)" : "已记录待研究请求:\(task.title)\n\(task.body)"
+        }
+    }
+
+    /// Real runner: routes each task through the local tool layer so a deferred
+    /// note/reminder/research actually lands instead of returning a stub string.
+    /// A denied tool (permission off) fails the task — the queue records the
+    /// truth rather than marking unfinished work "completed".
+    static func toolRunner(config: Config) -> Runner {
+        return { task in
+            let executor = LocalToolExecutor(config: config)
+            let result: LocalToolExecutor.Result
+            switch task.kind {
+            case .note:
+                result = executor.execute(.init(name: "notes.add", arguments: ["text": task.title]))
+            case .reminder:
+                var args = ["text": task.title]
+                if !task.body.isEmpty { args["due"] = task.body }
+                result = executor.execute(.init(name: "reminders.add", arguments: args))
+            case .research:
+                result = executor.execute(.init(name: "web_search.request", arguments: [
+                    "query": task.title,
+                    "reason": "夜间自主任务",
+                ]))
+            }
+            guard result.ok else {
+                throw QueueError.runnerFailed(result.message)
+            }
+            return result.message
         }
     }
 

@@ -117,10 +117,7 @@ final class Scheduler {
                         if let state = try await brain.refreshDreamBatchStatus(),
                            let result = try await brain.applyReadyDreamBatch(state) {
                             Log.info("dream", "Batch 梦境应用完成,阶段: \(result.evolutionSummary), 新技能: \(result.newSkill ?? "无"), 提案: \(result.proposalTitle ?? "无")")
-                            let taskResults = try await AutonomyTaskQueue().runDue(limit: 5)
-                            if !taskResults.isEmpty {
-                                Log.info("autonomy", "夜间任务完成 \(taskResults.filter { $0.succeeded }.count)/\(taskResults.count)")
-                            }
+                            await runDueAutonomyTasks()
                             pendingMorningWords = morningWords(from: result)
                             markDreamDone(for: state.memoryDay)
                         }
@@ -131,10 +128,7 @@ final class Scheduler {
                 }
                 let result = try await brain.dream(for: targetDate)
                 Log.info("dream", "梦境整理完成,阶段: \(result.evolutionSummary), 新技能: \(result.newSkill ?? "无"), 提案: \(result.proposalTitle ?? "无")")
-                let taskResults = try await AutonomyTaskQueue().runDue(limit: 5)
-                if !taskResults.isEmpty {
-                    Log.info("autonomy", "夜间任务完成 \(taskResults.filter { $0.succeeded }.count)/\(taskResults.count)")
-                }
+                await runDueAutonomyTasks()
                 // morning words delivered when owner returns (cached here)
                 pendingMorningWords = morningWords(from: result)
                 markDreamDone(for: memoryDay)
@@ -145,6 +139,21 @@ final class Scheduler {
     }
 
     private var pendingMorningWords: String? = nil
+
+    /// Run owner-approved deferred tasks for real (via the local tool layer),
+    /// not the offline stub. Failures (e.g. permission off) are recorded by the
+    /// queue's audit trail rather than silently marked done.
+    private func runDueAutonomyTasks() async {
+        do {
+            let queue = AutonomyTaskQueue(runner: AutonomyTaskQueue.toolRunner(config: config))
+            let results = try await queue.runDue(limit: 5)
+            if !results.isEmpty {
+                Log.info("autonomy", "夜间任务完成 \(results.filter { $0.succeeded }.count)/\(results.count)")
+            }
+        } catch {
+            Log.info("autonomy", "夜间任务执行失败: \(error)")
+        }
+    }
 
     /// Call when owner returns in the morning; delivers dream output once.
     func deliverMorningWordsIfAny() {

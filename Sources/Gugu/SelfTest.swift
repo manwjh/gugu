@@ -539,6 +539,22 @@ func runOfflineSelfTest() {
             check("autonomy.queue", false, "\(error)")
         }
 
+        // toolRunner: a deferred note task actually lands in notes.jsonl
+        // (tools.notes was approved above), unlike the offline stub.
+        do {
+            let notesFile = Paths.root.appendingPathComponent("notes.jsonl")
+            let before = (try? String(contentsOf: notesFile, encoding: .utf8))?.count ?? 0
+            let queue = AutonomyTaskQueue(runner: AutonomyTaskQueue.toolRunner(config: Config.load()))
+            let task = try queue.enqueue(kind: .note, title: "夜间任务真落地", body: "")
+            let run = try await queue.runDue(limit: 3)
+            let after = (try? String(contentsOf: notesFile, encoding: .utf8)) ?? ""
+            let landed = run.contains { $0.task.id == task.id && $0.succeeded }
+                && after.count > before && after.contains("夜间任务真落地")
+            check("autonomy.tool_runner", landed, "note 真写入 notes.jsonl")
+        } catch {
+            check("autonomy.tool_runner", false, "\(error)")
+        }
+
         let report = Audit.report()
         let reportText = (try? String(contentsOf: report, encoding: .utf8)) ?? ""
         check("audit.report", reportText.contains("今日审计") && reportText.contains("待批准提案"),
