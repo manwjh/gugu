@@ -41,7 +41,7 @@ final class Brain {
         "type": "object",
         "properties": [
             "mood": ["type": "string", "enum": ["开心", "平静", "好奇", "心疼", "无聊", "困", "委屈"]],
-            "action": ["type": "string", "enum": ["idle", "walk", "approach", "retreat", "perch", "sleep", "dance", "stare", "peck", "groom"]],
+            "action": ["type": "string", "enum": ["idle", "walk", "approach", "retreat", "perch", "sleep", "dance", "stare", "peck", "groom", "yawn"]],
             "speech": ["type": "string", "description": "想说的一两句短话,多数时候应该留空"],
             "memory_note": ["type": "string", "description": "值得记一笔的事,通常留空"],
         ],

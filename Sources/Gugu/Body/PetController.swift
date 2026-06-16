@@ -403,6 +403,9 @@ final class PetController: NSObject {
         case "groom":
             bird.setViewDirection(.side)
             bird.groomOnce()
+        case "yawn":
+            bird.setViewDirection(.front)
+            bird.yawnOnce()
         case "jump", "hop":
             bird.run(.sequence([
                 .moveBy(x: 0, y: 22, duration: 0.16),

@@ -728,4 +728,31 @@ final class BirdNode: SKNode {
             .rotate(toAngle: 0, duration: 0.3),
         ]))
     }
+
+    /// Yawn: head tilts up, beak opens wide, a single sleepy "z" floats up.
+    func yawnOnce() {
+        head.run(.sequence([
+            .rotate(toAngle: 0.35, duration: 0.35),
+            .wait(forDuration: 0.45),
+            .rotate(toAngle: 0, duration: 0.3),
+        ]))
+        beak.run(.sequence([
+            .scale(to: 1.8, duration: 0.35),
+            .wait(forDuration: 0.45),
+            .scale(to: 1.0, duration: 0.3),
+        ]))
+        zzz.removeAction(forKey: "zzz")
+        zzz.position = CGPoint(x: 18, y: 34)
+        zzz.alpha = 0
+        zzz.setScale(0.6)
+        zzz.run(.sequence([
+            .group([
+                .fadeAlpha(to: 0.9, duration: 0.3),
+                .moveBy(x: 4, y: 12, duration: 1.0),
+                .scale(to: 0.9, duration: 0.6),
+            ]),
+            .fadeOut(withDuration: 0.4),
+            .run { [weak self] in self?.zzz.position = CGPoint(x: 18, y: 38) },
+        ]))
+    }
 }
