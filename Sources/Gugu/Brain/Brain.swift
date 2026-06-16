@@ -143,6 +143,7 @@ final class Brain {
     }
 
     func handleLocalCommand(_ userText: String) -> ChatResult? {
+        _ = memory.capturePinnedFact(from: userText, source: "local_command")
         guard let command = LocalCommandParser.parse(userText) else { return nil }
         if command.deferred, let queued = enqueueAutonomyTask(command) {
             appendChatLog(user: userText, pet: queued)
@@ -218,6 +219,7 @@ final class Brain {
     ]
 
     func chat(_ userText: String, rhythmLine: String, mood: String = "", localCapabilities: String = "") async throws -> ChatResult {
+        _ = memory.capturePinnedFact(from: userText, source: "chat")
         chatHistory.append((role: "user", text: userText))
         if chatHistory.count > 20 { chatHistory.removeFirst(chatHistory.count - 20) }
 
@@ -238,7 +240,7 @@ final class Brain {
             messages.append(["role": turn.role == "user" ? "user" : "assistant", "content": content])
         }
 
-        // budget degrade: drop to instinct tier when running hot
+        // budget degrade: drop from conversation tier to the cheaper instinct tier when running hot
         let tier = budget.degradeLevel >= 1 ? config.instinct : config.conversation
         let reply = try await client.create(
             model: tier.id,
@@ -305,9 +307,9 @@ final class Brain {
         let proposalTitle: String?
     }
 
-    private func dreamPrompt() -> String {
-        let events = EventBus.todayLines().suffix(120).joined(separator: "\n")
-        let notes = memory.todayNotes()
+    private func dreamPrompt(for date: Date = Date()) -> String {
+        let events = EventBus.lines(for: date).suffix(120).joined(separator: "\n")
+        let notes = memory.notes(for: date)
         let current = memory.digest(maxChars: 800)
 
         return """
@@ -326,8 +328,8 @@ final class Brain {
         """
     }
 
-    func dream() async throws -> DreamResult {
-        let user = dreamPrompt()
+    func dream(for date: Date = Date()) async throws -> DreamResult {
+        let user = dreamPrompt(for: date)
         let reply = try await client.create(
             model: config.dream.id,
             maxTokens: config.dream.maxTokens,
@@ -343,12 +345,12 @@ final class Brain {
             throw AnthropicClient.APIError.malformed("dream json: \(reply.text)")
         }
 
-        return applyDreamObject(obj)
+        return try applyDreamObject(obj, for: date)
     }
 
-    func submitDreamBatch() async throws -> DreamBatchState {
-        let customID = "dream-\(ISO8601DateFormatter().string(from: Date()))"
-        let user = dreamPrompt()
+    func submitDreamBatch(for date: Date = Date()) async throws -> DreamBatchState {
+        let customID = "dream-\(Memory.dayString(for: date))-\(ISO8601DateFormatter().string(from: Date()))"
+        let user = dreamPrompt(for: date)
         let batch = try await client.createMessageBatch(
             customID: customID,
             model: config.dream.id,
@@ -361,6 +363,7 @@ final class Brain {
         let state = DreamBatchState(
             batchID: batch.id,
             customID: customID,
+            memoryDay: Memory.dayString(for: date),
             status: batch.processingStatus,
             createdAt: Date(),
             resultURL: batch.resultURL
@@ -388,17 +391,18 @@ final class Brain {
         }
         let resultsText = try await client.downloadBatchResults(from: resultURL)
         let dreamText = try Brain.extractDreamTextFromBatchResults(resultsText, customID: state.customID)
-        return try applyDreamBatchText(dreamText)
+        return try applyDreamBatchText(dreamText, for: state.memoryDate)
     }
 
-    func applyDreamBatchText(_ text: String) throws -> DreamResult {
+    func applyDreamBatchText(_ text: String, for date: Date = Date()) throws -> DreamResult {
         guard let data = Brain.extractJSON(text)?.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw AnthropicClient.APIError.malformed("dream batch json: \(text)")
         }
+        let result = try applyDreamObject(obj, for: date)
         DreamBatchStore.clear()
         Audit.record(kind: "dream.batch", summary: "已应用梦境 Batch 结果")
-        return applyDreamObject(obj)
+        return result
     }
 
     static func isBatchCompleted(_ status: String) -> Bool {
@@ -447,24 +451,31 @@ final class Brain {
         return text.isEmpty ? nil : text
     }
 
-    private func applyDreamObject(_ obj: [String: Any]) -> DreamResult {
-        if let owner = obj["owner"] as? String, !owner.isEmpty { memory.write(file: "owner.md", content: owner) }
-        if let proj = obj["projects"] as? String, !proj.isEmpty { memory.write(file: "projects.md", content: proj) }
-        if let selfNote = obj["self"] as? String, !selfNote.isEmpty { memory.write(file: "self.md", content: selfNote) }
+    private func applyDreamObject(_ obj: [String: Any], for date: Date) throws -> DreamResult {
+        _ = try memory.snapshotLongTermFiles(reason: "dream-\(Memory.dayString(for: date))")
+        if let owner = obj["owner"] as? String, !owner.isEmpty {
+            try memory.writeRequired(file: "owner.md", content: owner)
+        }
+        if let proj = obj["projects"] as? String, !proj.isEmpty {
+            try memory.writeRequired(file: "projects.md", content: proj)
+        }
+        if let selfNote = obj["self"] as? String, !selfNote.isEmpty {
+            try memory.writeRequired(file: "self.md", content: selfNote)
+        }
 
         var skillName: String? = nil
         if let name = obj["new_skill_name"] as? String,
            let body = obj["new_skill_body"] as? String,
            !name.trimmingCharacters(in: .whitespaces).isEmpty,
            !body.trimmingCharacters(in: .whitespaces).isEmpty {
-            memory.addSkill(name: name, body: body)
+            try memory.addSkillRequired(name: name, body: body)
             skillName = name
         }
-        memory.clearTodayNotes()
+        try memory.clearNotes(for: date)
 
         let settlement = Evolution(memory: memory).settleAfterDream(
             state: PetState.load(),
-            eventCount: EventBus.todayLines().count
+            eventCount: EventBus.lines(for: date).count
         )
 
         return DreamResult(

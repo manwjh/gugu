@@ -69,8 +69,11 @@ struct MiniYAML {
     }
 }
 
-/// Model tier configuration.
+/// One model tier (L2 instinct / L3 conversation / L4 dream). Each tier names a
+/// model id and its output cap. Tiers may all point at the same model id — the
+/// split is about call frequency and token caps, not necessarily distinct models.
 struct ModelTier {
+    var name: String      // "instinct" / "conversation" / "dream", for metering
     var id: String
     var maxTokens: Int
 }
@@ -80,8 +83,11 @@ struct Config {
     var apiURL: String
     var apiKey: String
 
+    /// L2 心跳。
     var instinct: ModelTier
+    /// L3 对话。
     var conversation: ModelTier
+    /// L4 梦境。
     var dream: ModelTier
 
     var dailyTokens: Int
@@ -105,18 +111,23 @@ struct Config {
     static func load() -> Config {
         let text = (try? String(contentsOf: Paths.config, encoding: .utf8)) ?? ""
         let y = MiniYAML(text: text)
+        // Shared base model id; each tier may override it with its own id.
+        let baseID = y.str("model.id", "deepseek-v4-flash")
         return Config(
             apiURL: y.str("api.url", "https://api.anthropic.com"),
             apiKey: y.str("api.key", ""),
             instinct: ModelTier(
-                id: y.str("models.instinct_id", "claude-haiku-4.5"),
-                maxTokens: y.int("models.instinct_max_tokens", 200)),
+                name: "instinct",
+                id: y.str("model.instinct_id", baseID),
+                maxTokens: y.int("model.instinct_max_tokens", 200)),
             conversation: ModelTier(
-                id: y.str("models.conversation_id", "claude-sonnet-4.6"),
-                maxTokens: y.int("models.conversation_max_tokens", 400)),
+                name: "conversation",
+                id: y.str("model.conversation_id", baseID),
+                maxTokens: y.int("model.conversation_max_tokens", 400)),
             dream: ModelTier(
-                id: y.str("models.dream_id", "claude-haiku-4.5"),
-                maxTokens: y.int("models.dream_max_tokens", 1500)),
+                name: "dream",
+                id: y.str("model.dream_id", baseID),
+                maxTokens: y.int("model.dream_max_tokens", 1500)),
             dailyTokens: y.int("budget.daily_tokens", 200_000),
             heartbeatMin: y.double("heartbeat.min_interval", 600),
             heartbeatMax: y.double("heartbeat.max_interval", 3600),
@@ -146,13 +157,12 @@ struct Config {
               url: \(apiURL)
               key: \(apiKey)
 
-            models:
-              instinct_id: claude-haiku-4.5          # L2 心跳
-              instinct_max_tokens: 200
-              conversation_id: claude-sonnet-4.6     # L3 对话
-              conversation_max_tokens: 400
-              dream_id: claude-haiku-4.5             # L4 梦境
-              dream_max_tokens: 1500
+            model:
+              id: deepseek-v4-flash    # 三层共用的基础模型;按层覆盖见下方可选项
+              instinct_max_tokens: 200       # L2 心跳
+              conversation_max_tokens: 400   # L3 对话
+              dream_max_tokens: 1500         # L4 梦境
+              # instinct_id / conversation_id / dream_id: 留空则用上面的 id
 
             budget:
               daily_tokens: 200000     # 今日 token 用完了就困了去睡觉(本地按字符估算)

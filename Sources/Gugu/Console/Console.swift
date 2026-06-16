@@ -264,18 +264,41 @@ final class Console: NSObject, NSWindowDelegate {
     }
 
     private func listenToggleTitle() -> String {
-        (app?.listener.enabled ?? false) ? "让咕咕别听了(关麦克风)" : "对咕咕说话(开麦克风·喊“咕咕”唤醒)"
+        guard let app else { return "对咕咕说话(开麦克风)" }
+        switch app.listener.status {
+        case .off:
+            return "对咕咕说话(开麦克风)"
+        case .starting:
+            return "咕咕正在接入麦克风..."
+        case .listening:
+            return "咕咕正在听(关麦克风)"
+        case .muted:
+            return "咕咕说话中,稍后继续听(关麦克风)"
+        case .unavailable(let reason):
+            return "麦克风不可用:\(reason)"
+        }
     }
 
     func listenIconName() -> String {
-        app?.listener.enabled == true ? "mic.slash" : "mic"
+        guard let app else { return "mic" }
+        switch app.listener.status {
+        case .off:
+            return "mic"
+        case .starting:
+            return "waveform"
+        case .listening:
+            return "mic.fill"
+        case .muted:
+            return "mic.slash"
+        case .unavailable:
+            return "exclamationmark.triangle"
+        }
     }
 
     @objc func toggleListen() {
         guard let app else { return }
         let newVal = !app.listener.enabled
-        app.listener.enabled = newVal
-        app.pet.say(newVal ? "(咕咕竖起了耳朵)" : "(咕咕不听了)")
+        app.setVoiceConversationEnabled(newVal)
         refreshMenu()
     }
 

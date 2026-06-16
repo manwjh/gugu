@@ -34,6 +34,18 @@ final class Evolution {
     /// Apply nightly experience settlement and generate approval proposals for
     /// stage changes. It never silently unlocks stronger capabilities.
     func settleAfterDream(state: PetState, eventCount: Int) -> Settlement {
+        do {
+            return try settleAfterDreamRequired(state: state, eventCount: eventCount)
+        } catch {
+            Log.info("evolution", "夜间结算保存失败:\(error)")
+            Audit.record(kind: "evolution.settle_failed", summary: "夜间成长结算失败",
+                         detail: ["error": "\(error)"])
+            let current = GrowthStage(rawStage: state.stage).displayName
+            return Settlement(stageChanged: false, oldStage: current, newStage: current, proposal: nil)
+        }
+    }
+
+    func settleAfterDreamRequired(state: PetState, eventCount: Int) throws -> Settlement {
         var next = state
         let oldStage = GrowthStage(rawStage: state.stage)
 
@@ -49,7 +61,7 @@ final class Evolution {
             proposal = writeStageProposal(from: oldStage, to: target, state: next)
         }
 
-        next.save()
+        try next.saveRequired()
         pruneExpiredProposals()
 
         return Settlement(
@@ -69,7 +81,12 @@ final class Evolution {
               GrowthStage(rawStage: state.stage) != target else { return false }
         state.stage = target.rawValue
         state.pending_stage = nil
-        state.save()
+        do {
+            try state.saveRequired()
+        } catch {
+            Log.info("evolution", "批准进化保存失败:\(error)")
+            return false
+        }
         appendBond("主人批准咕咕长成了\(target.displayName)。")
         return true
     }

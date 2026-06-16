@@ -2,10 +2,18 @@ import Foundation
 import Speech
 import AVFoundation
 
-/// 本地语音识别(STT)+ 唤醒词。
+enum ListenerStatus: Equatable {
+    case off
+    case starting
+    case listening
+    case muted
+    case unavailable(String)
+}
+
+/// 本地语音识别(STT)+ 持续语音会话。
 /// 隐私:requiresOnDeviceRecognition = true,完全本机识别,不上传任何音频或文字。
-/// 工作方式:菜单栏开启后,持续做本地识别,但只在听到唤醒词"咕咕/股股/咕咕鸟"后,
-/// 把唤醒词之后那一句话作为"指令"回调出去;没听到唤醒词的内容一律丢弃、不处理。
+/// 工作方式:菜单栏开启后,直到主人关闭麦克风前,都把主人说出的短句当作语音输入。
+/// 唤醒词"咕咕/股股/咕咕鸟"仍然可用,但不再是每句话的硬性前缀。
 @MainActor
 final class Listener: NSObject {
     private let engine = AVAudioEngine()
@@ -15,10 +23,17 @@ final class Listener: NSObject {
     private var running = false
 
     private var lastCommandAt = Date.distantPast
+    private var lastCommandFingerprint = ""
     private var consumedPrefixLen = 0
+    private var pendingDispatch: DispatchWorkItem?
+    private var unmuteDispatch: DispatchWorkItem?
+    private var lastTranscript = ""
+    private var mutedUntil = Date.distantPast
+    private(set) var status: ListenerStatus = .off
 
     /// 唤醒词后听到的一句指令(已去掉唤醒词本身)。
     var onCommand: ((String) -> Void)?
+    var onStateChange: ((ListenerStatus) -> Void)?
     /// 刚听到唤醒词、开始留意时的轻回调(可用于让鸟抬头)。
     var onWake: (() -> Void)?
 
@@ -27,7 +42,12 @@ final class Listener: NSObject {
     var enabled: Bool {
         get { UserDefaults.standard.bool(forKey: "gugu.listen.enabled") }
         set { UserDefaults.standard.set(newValue, forKey: "gugu.listen.enabled")
-              if newValue { startIfPossible() } else { stop() } }
+              if newValue {
+                  setStatus(.starting)
+                  startIfPossible()
+              } else {
+                  stop()
+              } }
     }
 
     func startIfPossible() {
@@ -36,6 +56,7 @@ final class Listener: NSObject {
             Task { @MainActor in
                 guard status == .authorized else {
                     Log.info("listen", "语音识别未授权(系统设置→隐私→语音识别)")
+                    self?.disable(reason: "语音识别未授权")
                     return
                 }
                 self?.requestMicAndStart()
@@ -50,22 +71,30 @@ final class Listener: NSObject {
             beginSession()
         case .notDetermined:
             AVCaptureDevice.requestAccess(for: .audio) { [weak self] ok in
-                Task { @MainActor in if ok { self?.beginSession() } }
+                Task { @MainActor in
+                    if ok {
+                        self?.beginSession()
+                    } else {
+                        self?.disable(reason: "麦克风未授权")
+                    }
+                }
             }
         default:
             Log.info("listen", "麦克风未授权")
+            disable(reason: "麦克风未授权")
         }
     }
 
     private func beginSession() {
         guard !running, let recognizer, recognizer.isAvailable else {
             Log.info("listen", "识别器不可用")
+            disable(reason: "识别器不可用")
             return
         }
 
         guard recognizer.supportsOnDeviceRecognition else {
             Log.info("listen", "当前系统/语言不支持本机语音识别,咕咕不会启用麦克风监听")
-            enabled = false
+            disable(reason: "本机语音识别不可用")
             return
         }
         let req = SFSpeechAudioBufferRecognitionRequest()
@@ -83,11 +112,15 @@ final class Listener: NSObject {
             try engine.start()
         } catch {
             Log.info("listen", "麦克风启动失败: \(error)")
+            disable(reason: "麦克风启动失败")
             return
         }
         running = true
         consumedPrefixLen = 0
+        lastTranscript = ""
+        pendingDispatch?.cancel()
         Log.info("listen", "咕咕竖起耳朵了(只在本机听,听完即忘)")
+        setStatus(Date() < mutedUntil ? .muted : .listening)
 
         task = recognizer.recognitionTask(with: req) { [weak self] result, error in
             guard let self else { return }
@@ -101,28 +134,19 @@ final class Listener: NSObject {
         }
     }
 
-    /// 在连续识别文本里找唤醒词,截取其后的内容作为指令。
+    /// 在连续识别文本里截取尚未消费的一句短话。唤醒词可选。
     private func handleTranscript(_ full: String, isFinal: Bool) {
-        // 只看尚未消费的尾部,避免重复触发
-        let tailStart = full.index(full.startIndex, offsetBy: min(consumedPrefixLen, full.count))
-        let tail = String(full[tailStart...])
-
-        guard let range = Listener.findWake(in: tail) else { return }
-        onWake?()
-        let command = String(tail[range.upperBound...])
-            .trimmingCharacters(in: CharacterSet(charactersIn: " ,，。!！?？、"))
-
-        // 指令太短先等等(可能还在说),最终结果才发
-        if command.count < 1 { return }
-        if !isFinal && command.count < 2 { return }
-
-        // 防抖:2 秒内不重复触发
-        guard Date().timeIntervalSince(lastCommandAt) > 2 else { return }
-        lastCommandAt = Date()
-        // 标记已消费到当前长度
-        consumedPrefixLen = full.count
-        Log.info("listen", "听到指令:\(command)")
-        onCommand?(command)
+        lastTranscript = full
+        guard Date() >= mutedUntil else {
+            consume(full)
+            return
+        }
+        guard let command = commandCandidate(from: full) else { return }
+        if isFinal {
+            dispatch(command, consumedLength: full.count)
+        } else {
+            scheduleDispatch(command, consumedLength: full.count)
+        }
     }
 
     private static func findWake(in s: String) -> Range<String.Index>? {
@@ -132,8 +156,104 @@ final class Listener: NSObject {
         return nil
     }
 
+    private func commandCandidate(from full: String) -> String? {
+        let safePrefix = min(consumedPrefixLen, full.count)
+        let tailStart = full.index(full.startIndex, offsetBy: safePrefix)
+        var tail = String(full[tailStart...])
+            .trimmingCharacters(in: CharacterSet(charactersIn: " \n\t,，。!！?？、"))
+        guard !tail.isEmpty else { return nil }
+
+        if let range = Listener.findWake(in: tail) {
+            onWake?()
+            tail = String(tail[range.upperBound...])
+        }
+        let command = Listener.cleanCommand(tail)
+        guard command.count >= 2 else { return nil }
+        return command
+    }
+
+    private static func cleanCommand(_ raw: String) -> String {
+        let droppedPrefixes = ["咕咕", "股股", "古古", "咕咕鸟", "小咕"]
+        var out = raw.trimmingCharacters(in: CharacterSet(charactersIn: " \n\t,，。!！?？、"))
+        for prefix in droppedPrefixes where out.hasPrefix(prefix) {
+            out.removeFirst(prefix.count)
+            out = out.trimmingCharacters(in: CharacterSet(charactersIn: " \n\t,，。!！?？、"))
+            break
+        }
+        while out.contains("  ") {
+            out = out.replacingOccurrences(of: "  ", with: " ")
+        }
+        if out.count > 120 {
+            out = String(out.prefix(120)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return out
+    }
+
+    private func scheduleDispatch(_ command: String, consumedLength: Int) {
+        pendingDispatch?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            Task { @MainActor in
+                guard let self, Date() >= self.mutedUntil else { return }
+                self.dispatch(command, consumedLength: max(consumedLength, self.lastTranscript.count))
+            }
+        }
+        pendingDispatch = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9, execute: item)
+    }
+
+    private func dispatch(_ command: String, consumedLength: Int) {
+        pendingDispatch?.cancel()
+        let fingerprint = command
+            .lowercased()
+            .filter { !$0.isWhitespace && !$0.isPunctuation }
+        guard !fingerprint.isEmpty else { return }
+        guard fingerprint != lastCommandFingerprint || Date().timeIntervalSince(lastCommandAt) > 3 else {
+            consumedPrefixLen = max(consumedPrefixLen, consumedLength)
+            return
+        }
+        lastCommandAt = Date()
+        lastCommandFingerprint = fingerprint
+        consumedPrefixLen = max(consumedPrefixLen, consumedLength)
+        Log.info("listen", "听到指令:\(command)")
+        onCommand?(command)
+    }
+
+    private func consume(_ full: String) {
+        pendingDispatch?.cancel()
+        consumedPrefixLen = max(consumedPrefixLen, full.count)
+    }
+
+    /// 咕咕自己说话时临时忽略识别结果,避免把 TTS 当成主人输入。
+    func suppressInput(for seconds: TimeInterval) {
+        pendingDispatch?.cancel()
+        unmuteDispatch?.cancel()
+        mutedUntil = max(mutedUntil, Date().addingTimeInterval(seconds))
+        if !lastTranscript.isEmpty {
+            consume(lastTranscript)
+        }
+        if enabled {
+            setStatus(.muted)
+            let item = DispatchWorkItem { [weak self] in
+                Task { @MainActor in
+                    guard let self else { return }
+                    if Date() >= self.mutedUntil, self.enabled {
+                        self.setStatus(self.running ? .listening : .starting)
+                    }
+                }
+            }
+            unmuteDispatch = item
+            DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: item)
+        }
+    }
+
+    /// Self-test hook: feeds deterministic transcripts without touching the microphone.
+    func debugFeedTranscript(_ full: String, isFinal: Bool) {
+        handleTranscript(full, isFinal: isFinal)
+    }
+
     private func restartSoon() {
         guard enabled else { return }
+        setStatus(.starting)
         stop(keepEnabled: true)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
             self?.beginSession()
@@ -141,7 +261,17 @@ final class Listener: NSObject {
     }
 
     func stop(keepEnabled: Bool = false) {
-        guard running || engine.isRunning else { return }
+        pendingDispatch?.cancel()
+        pendingDispatch = nil
+        unmuteDispatch?.cancel()
+        unmuteDispatch = nil
+        guard running || engine.isRunning else {
+            consumedPrefixLen = 0
+            lastTranscript = ""
+            if !keepEnabled { Log.info("listen", "咕咕不听了") }
+            if !keepEnabled { setStatus(.off) }
+            return
+        }
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         request?.endAudio()
@@ -149,6 +279,22 @@ final class Listener: NSObject {
         request = nil
         task = nil
         running = false
+        consumedPrefixLen = 0
+        lastTranscript = ""
         if !keepEnabled { Log.info("listen", "咕咕不听了") }
+        if !keepEnabled { setStatus(.off) }
+    }
+
+    private func disable(reason: String) {
+        UserDefaults.standard.set(false, forKey: "gugu.listen.enabled")
+        stop(keepEnabled: true)
+        Log.info("listen", reason)
+        setStatus(.unavailable(reason))
+    }
+
+    private func setStatus(_ next: ListenerStatus) {
+        guard status != next else { return }
+        status = next
+        onStateChange?(next)
     }
 }

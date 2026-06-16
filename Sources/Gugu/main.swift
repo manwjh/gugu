@@ -17,7 +17,6 @@ final class GuguApp: NSObject, NSApplicationDelegate {
     var scheduler: Scheduler!
     var console: Console!
     private var minuteTimer: Timer?
-    private var wasAway = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         config = Config.load()
@@ -38,6 +37,9 @@ final class GuguApp: NSObject, NSApplicationDelegate {
         pet = PetController()
         pet.refreshGrowthStage()
         console = Console(app: self)
+        pet.onStateChange = { [weak self] _ in
+            self?.console.refreshMenu()
+        }
 
         wire()
 
@@ -76,7 +78,11 @@ final class GuguApp: NSObject, NSApplicationDelegate {
 
     private func wire() {
         // 说话时朗读(若用户开了 TTS)
-        pet.speakAloud = { [weak self] text in self?.voice.speak(text) }
+        pet.speakAloud = { [weak self] text, mood in self?.voice.speak(text, mood: mood) }
+        voice.onWillSpeak = { [weak self] text in
+            let seconds = min(8.0, max(1.4, Double(text.count) * 0.16 + 0.9))
+            self?.listener.suppressInput(for: seconds)
+        }
 
         // 听到唤醒词后的语音指令 → 走对话链路(和打字聊天同一路径)
         listener.onWake = { [weak self] in
@@ -85,6 +91,9 @@ final class GuguApp: NSObject, NSApplicationDelegate {
         }
         listener.onCommand = { [weak self] command in
             self?.handleVoiceCommand(command)
+        }
+        listener.onStateChange = { [weak self] status in
+            self?.handleListenerStatus(status)
         }
 
         // heartbeat decisions → body acts them out
@@ -219,10 +228,14 @@ final class GuguApp: NSObject, NSApplicationDelegate {
 
     /// 语音指令(听到"咕咕"后那一句)→ 和打字聊天同一条对话链路。
     private func handleVoiceCommand(_ command: String) {
-        EventBus.shared.post(kind: "voice", summary: "主人对你说:\(String(command.prefix(40)))", weight: 0)
+        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        EventBus.shared.post(kind: "voice", summary: "主人对你说:\(String(trimmed.prefix(40)))", weight: 0)
         affect.chatted()
         if pet.isSleeping { pet.wake() }
-        if let local = brain.handleLocalCommand(command) {
+        pet.bird.tiltHead(true)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in self?.pet.bird.tiltHead(false) }
+        if let local = brain.handleLocalCommand(trimmed) {
             if local.action != "idle" { pet.perform(action: local.action) }
             if !local.reply.isEmpty { pet.say(local.reply) }
             return
@@ -230,7 +243,7 @@ final class GuguApp: NSObject, NSApplicationDelegate {
         Task { [weak self] in
             guard let self else { return }
             do {
-                let result = try await self.brain.chat(command,
+                let result = try await self.brain.chat(trimmed,
                                                        rhythmLine: self.rhythmSensor.promptLine(),
                                                        mood: self.affect.promptLine(),
                                                        localCapabilities: self.localCapabilitiesContext())
@@ -238,7 +251,38 @@ final class GuguApp: NSObject, NSApplicationDelegate {
                 if !result.reply.isEmpty { self.pet.say(result.reply) }  // say→气泡+朗读
             } catch {
                 Log.info("voice", "对话失败: \(error)")
+                self.pet.say("我刚才没听明白,你再说一遍。")
             }
+        }
+    }
+
+    func setVoiceConversationEnabled(_ enabled: Bool) {
+        if enabled {
+            if !voice.enabled {
+                voice.enabled = true
+            }
+            listener.enabled = true
+            pet.bird.setViewDirection(.front)
+            pet.bird.tiltHead(true)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in self?.pet.bird.tiltHead(false) }
+        } else {
+            listener.enabled = false
+            voice.stop()
+            pet.say("好,我先不听了。")
+        }
+    }
+
+    private func handleListenerStatus(_ status: ListenerStatus) {
+        console.refreshMenu()
+        switch status {
+        case .listening:
+            pet.bird.setViewDirection(.front)
+            pet.bird.tiltHead(true)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in self?.pet.bird.tiltHead(false) }
+        case .unavailable(let reason):
+            pet.say("麦克风现在用不了。\(reason)")
+        default:
+            break
         }
     }
 

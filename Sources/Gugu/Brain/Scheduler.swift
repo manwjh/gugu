@@ -56,7 +56,8 @@ final class Scheduler {
         reloadConfigIfNeeded()
         budget.rolloverIfNeeded()
 
-        // nightly dream at 03:00–04:00 (or first eval after)
+        // Nightly dream distills the previous memory day. If the app was not
+        // running at 03:00–05:00, the first later evaluation catches up.
         maybeDream()
 
         // freeze while owner is focused — the single biggest cost lever
@@ -104,10 +105,9 @@ final class Scheduler {
     }
 
     private func maybeDream() {
-        let df = DateFormatter(); df.dateFormat = "yyyy-MM-dd"
-        let today = df.string(from: Date())
-        let hour = Calendar.current.component(.hour, from: Date())
-        guard hour >= 3 && hour < 5, lastDreamDay != today, !dreamInFlight else { return }
+        guard let targetDate = dreamTargetDate(), !dreamInFlight else { return }
+        let memoryDay = Memory.dayString(for: targetDate)
+        guard lastDreamDay != memoryDay else { return }
         dreamInFlight = true
         Task {
             defer { Task { @MainActor in self.dreamInFlight = false } }
@@ -122,14 +122,14 @@ final class Scheduler {
                                 Log.info("autonomy", "夜间任务完成 \(taskResults.filter { $0.succeeded }.count)/\(taskResults.count)")
                             }
                             pendingMorningWords = morningWords(from: result)
-                            markDreamDone(for: today)
+                            markDreamDone(for: state.memoryDay)
                         }
                     } else {
-                        _ = try await brain.submitDreamBatch()
+                        _ = try await brain.submitDreamBatch(for: targetDate)
                     }
                     return
                 }
-                let result = try await brain.dream()
+                let result = try await brain.dream(for: targetDate)
                 Log.info("dream", "梦境整理完成,阶段: \(result.evolutionSummary), 新技能: \(result.newSkill ?? "无"), 提案: \(result.proposalTitle ?? "无")")
                 let taskResults = try await AutonomyTaskQueue().runDue(limit: 5)
                 if !taskResults.isEmpty {
@@ -137,7 +137,7 @@ final class Scheduler {
                 }
                 // morning words delivered when owner returns (cached here)
                 pendingMorningWords = morningWords(from: result)
-                markDreamDone(for: today)
+                markDreamDone(for: memoryDay)
             } catch {
                 Log.info("dream", "梦境失败: \(error)")
             }
@@ -162,6 +162,26 @@ final class Scheduler {
     private func markDreamDone(for day: String) {
         lastDreamDay = day
         SchedulerState(lastDreamDay: day).save()
+    }
+
+    private func dreamTargetDate(now: Date = Date()) -> Date? {
+        let calendar = Calendar.current
+        let hour = calendar.component(.hour, from: now)
+        guard let yesterday = calendar.date(byAdding: .day, value: -1, to: now) else { return nil }
+        let yesterdayKey = Memory.dayString(for: yesterday)
+        guard lastDreamDay != yesterdayKey else { return nil }
+
+        if (3..<5).contains(hour) {
+            return yesterday
+        }
+        if hour >= 5, hasDreamMaterial(for: yesterday) {
+            return yesterday
+        }
+        return nil
+    }
+
+    private func hasDreamMaterial(for date: Date) -> Bool {
+        !EventBus.lines(for: date).isEmpty || !brain.memory.notes(for: date).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func reloadConfigIfNeeded() {
@@ -195,6 +215,7 @@ final class Scheduler {
 }
 
 private struct SchedulerState: Codable {
+    var schemaVersion: Int = 2
     var lastDreamDay: String
 
     static func load() -> SchedulerState {
@@ -206,8 +227,27 @@ private struct SchedulerState: Codable {
     }
 
     func save() {
-        if let data = try? JSONEncoder().encode(self) {
+        var current = self
+        current.schemaVersion = 2
+        if let data = try? JSONEncoder().encode(current) {
             try? data.write(to: Paths.schedulerState)
         }
+    }
+}
+
+private extension SchedulerState {
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion
+        case lastDreamDay
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try c.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
+        let storedDay = try c.decodeIfPresent(String.self, forKey: .lastDreamDay) ?? ""
+        // Version 1 stored the calendar day when the dream ran. Version 2
+        // stores the memory day that was distilled, so old values cannot be
+        // compared safely.
+        lastDreamDay = schemaVersion >= 2 ? storedDay : ""
     }
 }

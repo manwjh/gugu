@@ -155,6 +155,46 @@ func runOfflineSelfTest() {
               GrowthStage.adjustedDailyTokens(base: 200_000, stage: .hatchling) < 200_000
                 && GrowthStage.adjustedDailyTokens(base: 200_000, stage: .spirit) > 200_000,
               "stage budget multipliers")
+        let visualBird = BirdNode()
+        visualBird.setViewDirection(.front, animated: false)
+        let frontView = visualBird.debugAppearance()
+        visualBird.setViewDirection(.side, animated: false)
+        let sideView = visualBird.debugAppearance()
+        visualBird.setViewDirection(.back, animated: false)
+        let backView = visualBird.debugAppearance()
+        check("bird.views",
+              frontView.direction == .front
+                && frontView.visibleEyes == 2
+                && frontView.beakVisible
+                && frontView.bellyVisible
+                && sideView.direction == .side
+                && sideView.visibleEyes == 1
+                && sideView.beakVisible
+                && backView.direction == .back
+                && backView.visibleEyes == 0
+                && !backView.beakVisible
+                && !backView.bellyVisible
+                && backView.backDetailsVisible
+                && frontView.closedEyeMarksVisible == 0
+                && !frontView.sleepZVisible,
+              "front=\(frontView.visibleEyes) eyes side=\(sideView.visibleEyes) eye backDetails=\(backView.backDetailsVisible)")
+        let sleepBird = BirdNode()
+        sleepBird.setViewDirection(.front, animated: false)
+        sleepBird.setEyesClosed(true, animated: false)
+        sleepBird.startSleepZzz()
+        let sleepAppearance = sleepBird.debugAppearance()
+        sleepBird.setEyesClosed(false, animated: false)
+        sleepBird.stopSleepZzz()
+        let awakeAppearance = sleepBird.debugAppearance()
+        check("sleep.display_state",
+              sleepAppearance.direction == .front
+                && sleepAppearance.visibleEyes == 0
+                && sleepAppearance.closedEyeMarksVisible == 2
+                && sleepAppearance.sleepZVisible
+                && awakeAppearance.visibleEyes == 2
+                && awakeAppearance.closedEyeMarksVisible == 0
+                && !awakeAppearance.sleepZVisible,
+              "sleep eyes=\(sleepAppearance.visibleEyes) lids=\(sleepAppearance.closedEyeMarksVisible) z=\(sleepAppearance.sleepZVisible); awake eyes=\(awakeAppearance.visibleEyes)")
         check("vision.events",
               VisionExpression.sleepy.summary.contains("累")
                 && VisionGesture.wave.summary.contains("挥手")
@@ -177,13 +217,16 @@ func runOfflineSelfTest() {
         let batchState = DreamBatchState(
             batchID: "batch_offline",
             customID: "dream_offline",
+            memoryDay: "2026-01-02",
             status: "in_progress",
             createdAt: Date(),
             resultURL: nil
         )
         DreamBatchStore.save(batchState)
-        check("dream.batch_store", DreamBatchStore.load()?.batchID == "batch_offline",
-              DreamBatchStore.load()?.status ?? "(nil)")
+        let loadedBatch = DreamBatchStore.load()
+        check("dream.batch_store",
+              loadedBatch?.batchID == "batch_offline" && loadedBatch?.memoryDay == "2026-01-02",
+              loadedBatch?.status ?? "(nil)")
         DreamBatchStore.clear()
 
         do {
@@ -214,6 +257,43 @@ func runOfflineSelfTest() {
         let cleanedSpeech = PetController.desktopSpeech(from: "（低头理羽毛）这根快掉了。就这样。第三句不用显示。")
         check("desktop_speech.clean", !cleanedSpeech.contains("低头") && cleanedSpeech.contains("这根快掉了"),
               cleanedSpeech)
+        let ttsText = Voice.stripStageDirections("（歪头）「今天不错！」*拍翅膀*再试一次。")
+        let ttsPieces = Voice.splitSentences(ttsText)
+        check("voice.tts_text",
+              ttsText == "今天不错！再试一次。" && ttsPieces == ["今天不错！", "再试一次。"],
+              "\(ttsText) -> \(ttsPieces.joined(separator: "|"))")
+        let longTtsPieces = Voice.splitSentences("这是一段比较长的咕咕语音,需要拆成更短的片段来读,这样听起来不会像系统读屏。")
+        check("voice.tts_chunk",
+              longTtsPieces.count >= 2 && longTtsPieces.allSatisfy { $0.count <= 28 },
+              longTtsPieces.joined(separator: "|"))
+        let voiceListener = Listener()
+        var heardVoiceCommands: [String] = []
+        voiceListener.onCommand = { heardVoiceCommands.append($0) }
+        voiceListener.debugFeedTranscript("过来看看", isFinal: true)
+        voiceListener.debugFeedTranscript("过来看看", isFinal: true)
+        voiceListener.debugFeedTranscript("过来看看再跳一下", isFinal: true)
+        check("voice.conversation",
+              heardVoiceCommands == ["过来看看", "再跳一下"],
+              heardVoiceCommands.joined(separator: "|"))
+        let wakeListener = Listener()
+        var wakeCommand = ""
+        wakeListener.onCommand = { wakeCommand = $0 }
+        wakeListener.debugFeedTranscript("咕咕 帮我记一下今天把语音会话补齐了", isFinal: true)
+        check("voice.wake_optional",
+              wakeCommand == "帮我记一下今天把语音会话补齐了",
+              wakeCommand)
+        let suppressListener = Listener()
+        var suppressedCount = 0
+        suppressListener.onCommand = { _ in suppressedCount += 1 }
+        suppressListener.suppressInput(for: 1)
+        suppressListener.debugFeedTranscript("我在听直接跟我说就行", isFinal: true)
+        suppressListener.stop()
+        check("voice.echo_suppression",
+              suppressedCount == 0,
+              "suppressed=\(suppressedCount)")
+        check("voice.listener_status",
+              suppressListener.status == .off,
+              "\(suppressListener.status)")
 
         let lockedExecutor = LocalToolExecutor(config: config)
         let deniedNote = lockedExecutor.execute(.init(name: "notes.add", arguments: ["text": "未授权不应写入"]))
@@ -251,19 +331,71 @@ func runOfflineSelfTest() {
         }
 
         let memory = Memory()
-        memory.write(file: "owner.md", content: "主人正在研发 macOS 桌面小鸟。")
-        memory.write(file: "projects.md", content: "当前重点是把本地回归测试补起来。")
-        memory.write(file: "self.md", content: "我是咕咕,会先安静观察。")
+        do {
+            try memory.writeRequired(file: "owner.md", content: "主人正在研发 macOS 桌面小鸟。")
+            try memory.writeRequired(file: "projects.md", content: "当前重点是把本地回归测试补起来。")
+            try memory.writeRequired(file: "self.md", content: "我是咕咕,会先安静观察。")
+        } catch {
+            check("memory.write", false, "\(error)")
+        }
         let digest = memory.digest()
         check("memory.digest", digest.contains("主人") && digest.contains("近况") && digest.contains("我"),
               "digest=「\(digest.prefix(80))」")
 
-        memory.appendNote("离线自测确认本地记忆能写入")
-        check("memory.note", memory.todayNotes().contains("离线自测"),
-              "notes_today.md 可读")
-        memory.clearTodayNotes()
-        check("memory.note.clear", memory.todayNotes().isEmpty,
-              "notes_today.md 已清理")
+        do {
+            let capture1 = try memory.applyPinnedFact(.ownerName(name: "王哥", preferred: true),
+                                                      source: "offline-test",
+                                                      rawText: "我叫王哥")
+            let capture2 = memory.capturePinnedFact(from: "我是深圳王哥", source: "offline-test")
+            let pinned = PinnedMemory.load()
+            check("memory.pinned_owner",
+                  capture1.value == "王哥"
+                    && capture2?.value == "深圳王哥"
+                    && pinned.owner.preferredName == "王哥"
+                    && pinned.owner.names.contains("深圳王哥")
+                    && memory.digest().contains("固定记忆")
+                    && memory.digest().contains("王哥"),
+                  "preferred=\(pinned.owner.preferredName ?? "nil") names=\(pinned.owner.names.joined(separator: "|"))")
+            check("memory.pinned_guard",
+                  PinnedMemoryExtractor.extract(from: "我是开玩笑的") == nil
+                    && PinnedMemoryExtractor.extract(from: "我是说这个方案") == nil,
+                  "ambiguous 我是* not captured")
+        } catch {
+            check("memory.pinned_owner", false, "\(error)")
+        }
+
+        do {
+            try memory.appendNoteRequired("离线自测确认本地记忆能写入")
+            check("memory.note", memory.todayNotes().contains("离线自测"),
+                  "dated notes 可读")
+            try memory.clearNotes(for: Date())
+            check("memory.note.clear", memory.todayNotes().isEmpty,
+                  "dated notes 已清理")
+        } catch {
+            check("memory.note", false, "\(error)")
+        }
+
+        let fixedDreamDate = Date(timeIntervalSince1970: 1_767_225_600) // 2026-01-01 UTC in local-safe tests.
+        do {
+            try memory.appendNoteRequired("昨天的记忆不应被今天清理", date: fixedDreamDate)
+            try memory.appendNoteRequired("今天的记忆保留", date: Date())
+            let beforeSnapshots = (try? FileManager.default.contentsOfDirectory(at: Paths.snapshots, includingPropertiesForKeys: nil)
+                .filter { $0.lastPathComponent.hasPrefix("memory-owner.md.") }.count) ?? 0
+            let applied = try localBrain.applyDreamBatchText("""
+            {"owner":"主人昨天在检查记忆持久化","projects":"补齐梦境可靠性","self":"我会先备份再改记忆","new_skill_name":"深夜记忆备份","new_skill_body":"做梦前先留快照,失败就不清笔记。","morning_words":"昨晚的梦收好了"}
+            """, for: fixedDreamDate)
+            let afterSnapshots = (try? FileManager.default.contentsOfDirectory(at: Paths.snapshots, includingPropertiesForKeys: nil)
+                .filter { $0.lastPathComponent.hasPrefix("memory-owner.md.") }.count) ?? 0
+            check("dream.memory_apply",
+                  applied.morningWords == "昨晚的梦收好了"
+                    && memory.notes(for: fixedDreamDate, includeLegacy: false).isEmpty
+                    && memory.todayNotes().contains("今天的记忆保留")
+                    && afterSnapshots > beforeSnapshots,
+                  "snapshots \(beforeSnapshots)→\(afterSnapshots)")
+            try memory.clearNotes(for: Date())
+        } catch {
+            check("dream.memory_apply", false, "\(error)")
+        }
 
         memory.addSkill(name: "深夜离线自测", body: "深夜调试时少说话,先确认本地链路稳不稳。")
         let skills = memory.activeSkills(rhythm: .focused)

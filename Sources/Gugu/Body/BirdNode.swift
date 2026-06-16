@@ -12,6 +12,8 @@ struct BirdAppearanceDebug {
     let beakVisible: Bool
     let bellyVisible: Bool
     let backDetailsVisible: Bool
+    let closedEyeMarksVisible: Int
+    let sleepZVisible: Bool
 }
 
 /// Procedurally drawn bird. No art assets — everything is SKShapeNode.
@@ -39,6 +41,7 @@ final class BirdNode: SKNode {
     private let aura = SKShapeNode(circleOfRadius: 33)
     private var baseScale: CGFloat = 1.0
     private var currentStage: GrowthStage = .hatchling
+    private var eyesClosed = false
     private(set) var viewDirection: BirdViewDirection = .front
 
     /// Bird faces right by default in side view; flip via xScale on the whole node.
@@ -129,15 +132,16 @@ final class BirdNode: SKNode {
             glint.position = CGPoint(x: 1, y: 1.2)
             eye.addChild(glint)
         }
-        // eyelids (hidden unless blinking/sleeping): same color as feathers
+        // Closed eyes are drawn as simple arcs. Filled lids read like glasses at desktop scale.
         for (lid, eye) in [(eyelidL, eyeL), (eyelidR, eyeR)] {
-            lid.path = CGPath(ellipseIn: CGRect(x: -4.2, y: -4.2, width: 8.4, height: 8.4), transform: nil)
-            lid.fillColor = feather
-            lid.strokeColor = NSColor(calibratedWhite: 0.25, alpha: 0.6)
-            lid.lineWidth = 1
+            lid.path = closedEyePath(width: 7.2)
+            lid.fillColor = .clear
+            lid.strokeColor = NSColor(calibratedWhite: 0.22, alpha: 0.72)
+            lid.lineWidth = 1.45
+            lid.lineCap = .round
             lid.position = eye.position
-            lid.yScale = 0.0
-            lid.zPosition = 1
+            lid.alpha = 0
+            lid.zPosition = 2
             head.addChild(lid)
         }
 
@@ -289,12 +293,8 @@ final class BirdNode: SKNode {
         rotate(head, to: 0, duration: duration)
         move(eyeL, to: CGPoint(x: 2, y: 2), duration: duration)
         move(eyeR, to: CGPoint(x: 8, y: 2.2), duration: duration)
-        eyeL.alpha = 0
-        eyeR.alpha = 1
         eyeL.setScale(0.9)
         eyeR.setScale(1.02)
-        eyelidL.alpha = 0
-        eyelidR.alpha = 1
         move(eyelidL, to: CGPoint(x: 2, y: 2), duration: duration)
         move(eyelidR, to: CGPoint(x: 8, y: 2.2), duration: duration)
         beak.path = sideBeakPath()
@@ -321,6 +321,8 @@ final class BirdNode: SKNode {
         move(footR, to: CGPoint(x: 6, y: 0), duration: duration)
         move(blushL, to: CGPoint(x: -3, y: -4), duration: duration)
         move(blushR, to: CGPoint(x: 14, y: -4), duration: duration)
+        applyStageWingAlpha(sideView: true)
+        applyEyeClosure(animated: false)
     }
 
     private func applyFrontView(duration: TimeInterval) {
@@ -333,12 +335,8 @@ final class BirdNode: SKNode {
         rotate(head, to: 0, duration: duration)
         move(eyeL, to: CGPoint(x: -6.5, y: 2.2), duration: duration)
         move(eyeR, to: CGPoint(x: 6.5, y: 2.2), duration: duration)
-        eyeL.alpha = 1
-        eyeR.alpha = 1
         eyeL.setScale(0.92)
         eyeR.setScale(0.92)
-        eyelidL.alpha = 1
-        eyelidR.alpha = 1
         move(eyelidL, to: CGPoint(x: -6.5, y: 2.2), duration: duration)
         move(eyelidR, to: CGPoint(x: 6.5, y: 2.2), duration: duration)
         beak.path = frontBeakPath()
@@ -353,8 +351,8 @@ final class BirdNode: SKNode {
         wingR.xScale = -1
         move(wingL, to: CGPoint(x: -17, y: 22), duration: duration)
         move(wingR, to: CGPoint(x: 17, y: 22), duration: duration)
-        wingL.zPosition = 1.8
-        wingR.zPosition = 1.8
+        wingL.zPosition = 0.85
+        wingR.zPosition = 0.85
         rotate(wingL, to: -0.14, duration: duration)
         rotate(wingR, to: 0.14, duration: duration)
         tail.path = backTailPath()
@@ -365,6 +363,8 @@ final class BirdNode: SKNode {
         move(footR, to: CGPoint(x: 7, y: 0), duration: duration)
         move(blushL, to: CGPoint(x: -10, y: -4), duration: duration)
         move(blushR, to: CGPoint(x: 10, y: -4), duration: duration)
+        applyStageWingAlpha(sideView: false)
+        applyEyeClosure(animated: false)
     }
 
     private func applyBackView(duration: TimeInterval) {
@@ -401,6 +401,8 @@ final class BirdNode: SKNode {
         move(footR, to: CGPoint(x: 7, y: 0), duration: duration)
         blushL.alpha = 0
         blushR.alpha = 0
+        applyStageWingAlpha(sideView: false)
+        applyEyeClosure(animated: false)
     }
 
     private func move(_ node: SKNode, to point: CGPoint, duration: TimeInterval) {
@@ -417,6 +419,14 @@ final class BirdNode: SKNode {
         } else {
             node.run(.rotate(toAngle: angle, duration: duration))
         }
+    }
+
+    private func closedEyePath(width: CGFloat) -> CGPath {
+        let path = CGMutablePath()
+        path.move(to: CGPoint(x: -width / 2, y: 0))
+        path.addQuadCurve(to: CGPoint(x: width / 2, y: 0),
+                          control: CGPoint(x: 0, y: -2.2))
+        return path
     }
 
     private func sideTailPath() -> CGPath {
@@ -466,6 +476,56 @@ final class BirdNode: SKNode {
         path.addCurve(to: CGPoint(x: 5, y: -5), control1: CGPoint(x: -1, y: -19), control2: CGPoint(x: 3, y: -11))
         path.closeSubpath()
         return path
+    }
+
+    private func applyStageWingAlpha(sideView: Bool) {
+        let primary: CGFloat
+        let secondary: CGFloat
+        switch currentStage {
+        case .hatchling:
+            primary = 0.72
+            secondary = 0.55
+        case .fledgling:
+            primary = 0.9
+            secondary = 0.72
+        case .adult:
+            primary = 1
+            secondary = 0.8
+        case .spirit:
+            primary = 1
+            secondary = 0.86
+        }
+        wingL.alpha = primary
+        wingR.alpha = sideView ? secondary : primary
+    }
+
+    private func visibleEyeTargets() -> [(eye: SKShapeNode, lid: SKShapeNode)] {
+        switch viewDirection {
+        case .front:
+            return [(eyeL, eyelidL), (eyeR, eyelidR)]
+        case .side:
+            return [(eyeR, eyelidR)]
+        case .back:
+            return []
+        }
+    }
+
+    private func applyEyeClosure(animated: Bool) {
+        let visiblePairs = visibleEyeTargets()
+        for pair in [(eyeL, eyelidL), (eyeR, eyelidR)] {
+            let visible = visiblePairs.contains { $0.eye === pair.0 }
+            setAlpha(pair.0, to: visible && !eyesClosed ? 1 : 0, animated: animated)
+            setAlpha(pair.1, to: visible && eyesClosed ? 1 : 0, animated: animated)
+        }
+    }
+
+    private func setAlpha(_ node: SKNode, to alpha: CGFloat, animated: Bool) {
+        node.removeAction(forKey: "alpha")
+        if animated {
+            node.run(.fadeAlpha(to: alpha, duration: 0.14), withKey: "alpha")
+        } else {
+            node.alpha = alpha
+        }
     }
 
     private func sideBeakPath() -> CGPath {
@@ -531,7 +591,9 @@ final class BirdNode: SKNode {
             visibleEyes: visibleEyes,
             beakVisible: beak.alpha > 0.05,
             bellyVisible: belly.alpha > 0.05,
-            backDetailsVisible: backPatch.alpha > 0.05 && backStripe.alpha > 0.05
+            backDetailsVisible: backPatch.alpha > 0.05 && backStripe.alpha > 0.05,
+            closedEyeMarksVisible: [eyelidL, eyelidR].filter { $0.alpha > 0.05 }.count,
+            sleepZVisible: zzz.alpha > 0.05
         )
     }
 
@@ -577,20 +639,27 @@ final class BirdNode: SKNode {
     }
 
     func blinkOnce() {
-        for lid in [eyelidL, eyelidR] {
-            lid.run(.sequence([
-                .scaleY(to: 1.0, duration: 0.06),
+        guard !eyesClosed, viewDirection != .back else { return }
+        for pair in visibleEyeTargets() {
+            pair.eye.run(.sequence([
+                .fadeAlpha(to: 0.12, duration: 0.05),
                 .wait(forDuration: 0.08),
-                .scaleY(to: 0.0, duration: 0.06),
-            ]))
+                .fadeAlpha(to: 1, duration: 0.06),
+            ]), withKey: "blinkEye")
+            pair.lid.run(.sequence([
+                .fadeAlpha(to: 1, duration: 0.05),
+                .wait(forDuration: 0.08),
+                .fadeAlpha(to: 0, duration: 0.06),
+            ]), withKey: "blinkLid")
         }
     }
 
-    func setEyesClosed(_ closed: Bool) {
-        for lid in [eyelidL, eyelidR] {
-            lid.removeAllActions()
-            lid.run(.scaleY(to: closed ? 1.0 : 0.0, duration: 0.2))
+    func setEyesClosed(_ closed: Bool, animated: Bool = true) {
+        eyesClosed = closed
+        for node in [eyeL, eyeR, eyelidL, eyelidR] {
+            node.removeAllActions()
         }
+        applyEyeClosure(animated: animated)
     }
 
     func flapWings(times: Int = 3, fast: Bool = false) {
@@ -610,7 +679,10 @@ final class BirdNode: SKNode {
     }
 
     func startSleepZzz() {
-        zzz.alpha = 0
+        zzz.removeAction(forKey: "zzz")
+        zzz.position = CGPoint(x: 18, y: 36)
+        zzz.alpha = 0.9
+        zzz.setScale(0.7)
         let float = SKAction.repeatForever(.sequence([
             .run { [weak self] in
                 guard let self else { return }

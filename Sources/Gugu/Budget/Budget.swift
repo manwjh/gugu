@@ -11,6 +11,8 @@ final class Budget {
         var calls: Int
         var tokensIn: Int
         var tokensOut: Int
+        /// Per-tier token totals (in+out), keyed by ModelTier.name.
+        var byTier: [String: Int] = [:]
 
         var total: Int { tokensIn + tokensOut }
     }
@@ -49,9 +51,12 @@ final class Budget {
 
     func record(inputChars: Int, outputChars: Int, tier: ModelTier) {
         rolloverIfNeeded()
-        usage.tokensIn += Budget.estimateTokens(chars: inputChars)
-        usage.tokensOut += Budget.estimateTokens(chars: outputChars)
+        let tin = Budget.estimateTokens(chars: inputChars)
+        let tout = Budget.estimateTokens(chars: outputChars)
+        usage.tokensIn += tin
+        usage.tokensOut += tout
         usage.calls += 1
+        usage.byTier[tier.name, default: 0] += tin + tout
         save()
     }
 

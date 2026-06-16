@@ -63,10 +63,15 @@ L4 梦境层   Batch API · 每晚一次    记忆固化 + 自我反思 + 进化
 
 ```
 Gugu/
-├── config.yaml          # 模型、预算、感知开关、心跳参数
+├── config.yaml          # 模型、预算、感知开关、心跳参数、工具权限
 ├── evolution.yaml       # 形态定义与解锁条件(出厂内置,进化可追加)
 ├── state.json           # 当前形态、经验指标、信任分
 ├── persona.md           # 人格系统提示(含不可变内核段)
+├── pinned.json          # 主人显式要求记住的固定事实
+├── scheduler.json       # 夜间梦境交付状态
+├── dream_batch.json     # 可选 Batch 梦境的待回收状态
+├── chat.jsonl           # 主动对话日志
+├── gugu.log             # 本机运行日志
 ├── memory/
 │   ├── owner.md         # 对主人的认识
 │   ├── projects.md      # 主人在忙什么
@@ -76,35 +81,54 @@ Gugu/
 │   ├── 主人赶deadline时.md
 │   └── 周五晚上.md
 ├── proposals/           # 待批准的自我修改(diff 格式,过期即删)
+├── snapshots/           # 应用提案前的快照
 ├── events/2026-06-12.jsonl   # 当日事件流水,7 天滚动删除
 ├── audit/               # 感知审计日志 + 自主行动留痕
-└── usage.json           # 当日 token/费用计量(熔断依据)
+├── models/              # 可选本地视觉模型
+└── usage.json           # 当日 token 计量(熔断依据)
 ```
 
 `config.yaml` 核心段:
 
 ```yaml
+pet:
+  name: 咕咕
+
 api:
   url: https://taas.hk
   key: ""                       # 当前单机版从 config.yaml 读取;钥匙串是后续加固项
+
 models:
-  instinct:     { id: claude-haiku-4-5,  max_tokens: 200 }
-  conversation: { id: claude-sonnet-4-6, max_tokens: 400, effort: low }
-  deep:         { id: claude-opus-4-8,   thinking: adaptive, effort: high }  # 高阶形态解锁
-  dream:        { id: claude-haiku-4-5,  use_batch: true, schedule: "03:00" }
+  instinct_id: claude-haiku-4.5
+  instinct_max_tokens: 200
+  conversation_id: claude-sonnet-4.6
+  conversation_max_tokens: 400
+  dream_id: claude-haiku-4.5
+  dream_max_tokens: 1500
+
 budget:
-  daily_usd: 0.50               # 随形态变化,见进化篇
-  degrade_order: [computer_use, deep, conversation, instinct]   # 逐级降档,最后才睡
+  daily_tokens: 200000          # 随形态变化,见进化篇
+
 heartbeat:
   min_interval: 600             # 秒;活跃互动时下探
   max_interval: 3600            # 空闲上限
   freeze_when_focused: true     # 主人专注工作 = 心跳冻结
+
 senses:
   screen: true
   input_rhythm: true            # 键鼠节奏,最高优先级信号
   camera: false                 # 当前由菜单栏 UserDefaults 开关控制,默认关
   microphone: false             # 当前由菜单栏 UserDefaults 开关控制,默认关
   blacklist_apps: [1Password, Keychain Access]
+
+tools:
+  web_search: false             # 高阶能力,必须经 proposals 批准
+  notes: false
+  reminders: false
+  local_notifications: false
+
+dream:
+  use_batch: false              # 开启后夜间梦境走 /v1/messages/batches
 ```
 
 ---

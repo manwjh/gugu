@@ -107,6 +107,7 @@ final class PetController: NSObject {
     var onPoke: (() -> Void)?
     var onPet: (() -> Void)?
     var onThrown: (() -> Void)?
+    var onStateChange: ((PetBodyState) -> Void)?
     var menuProvider: (() -> NSMenu)?
     var speechAvoidanceFrame: CGRect?
 
@@ -280,7 +281,12 @@ final class PetController: NSObject {
     }
 
     private func idleMicroBehavior() {
-        guard state == .idle, Date() > stateUntil else { return }
+        guard Date() > stateUntil else { return }
+        if state == .perch {
+            perchedMicroBehavior()
+            return
+        }
+        guard state == .idle else { return }
         let roll = Double.random(in: 0...1)
         switch roll {
         case ..<0.35:
@@ -298,9 +304,9 @@ final class PetController: NSObject {
             bird.setViewDirection(.front)
             bird.peckOnce()
         case ..<0.68:
-            if state == .perch {
-                bird.setViewDirection(.back)
-            }
+            bird.setViewDirection(.front)
+            bird.tiltHead(true)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in self?.bird.tiltHead(false) }
         case ..<0.72:
             // glance toward cursor
             let mouse = NSEvent.mouseLocation
@@ -312,6 +318,26 @@ final class PetController: NSObject {
             bird.flapWings(times: 2)
         default:
             break // just stand there, being a bird
+        }
+    }
+
+    private func perchedMicroBehavior() {
+        let roll = Double.random(in: 0...1)
+        switch roll {
+        case ..<0.34:
+            bird.setViewDirection(.back)
+            bird.flapWings(times: 1)
+            stateUntil = Date().addingTimeInterval(4.2)
+        case ..<0.56:
+            bird.setViewDirection(.front)
+            bird.peckOnce()
+            stateUntil = Date().addingTimeInterval(1.4)
+        case ..<0.76:
+            bird.setViewDirection(.side)
+            bird.groomOnce()
+            stateUntil = Date().addingTimeInterval(2.0)
+        default:
+            bird.setViewDirection(.front)
         }
     }
 
@@ -429,7 +455,9 @@ final class PetController: NSObject {
     }
 
     private func transition(to new: PetBodyState) {
+        guard state != new else { return }
         state = new
+        onStateChange?(new)
     }
 
     func refreshGrowthStage() {
@@ -466,18 +494,28 @@ final class PetController: NSObject {
     func sleep() {
         guard state != .sleep else { return }
         bird.setViewDirection(.front)
+        bird.removeAction(forKey: "struggle")
+        bird.zRotation = 0
+        bird.position.y = feetY
+        bird.footL.run(.fadeAlpha(to: 1, duration: 0.12))
+        bird.footR.run(.fadeAlpha(to: 1, duration: 0.12))
+        bird.xScale = (facingRight ? 1 : -1) * growthScale
         transition(to: .sleep)
-        bird.setEyesClosed(true)
+        bird.setEyesClosed(true, animated: false)
         bird.startSleepZzz()
         bird.removeAction(forKey: "blinkLoop")
-        bird.yScale = 0.92
+        bird.yScale = 0.92 * growthScale
     }
 
     func wake() {
         guard state == .sleep else { return }
-        bird.setEyesClosed(false)
+        bird.setEyesClosed(false, animated: false)
         bird.stopSleepZzz()
-        bird.yScale = 1.0
+        bird.position.y = feetY
+        bird.footL.run(.fadeAlpha(to: 1, duration: 0.12))
+        bird.footR.run(.fadeAlpha(to: 1, duration: 0.12))
+        bird.xScale = (facingRight ? 1 : -1) * growthScale
+        bird.yScale = growthScale
         bird.startIdleAnimations()
         transition(to: .idle)
     }
@@ -528,6 +566,11 @@ final class PetController: NSObject {
                 transition(to: .falling)
             } else if state == .perch {
                 bird.flapWings(times: 6, fast: true)
+                vel = CGVector(dx: CGFloat.random(in: -40...40), dy: 0)
+                transition(to: .falling)
+            } else if state == .sleep && !isOnGround {
+                wake()
+                bird.flapWings(times: 4, fast: true)
                 vel = CGVector(dx: CGFloat.random(in: -40...40), dy: 0)
                 transition(to: .falling)
             }
@@ -624,7 +667,7 @@ final class PetController: NSObject {
     }
 
     private func checkPerchStillValid() {
-        guard state == .perch, case let .appWindow(id, frame) = supportSurface else {
+        guard (state == .perch || state == .sleep), case let .appWindow(id, frame) = supportSurface else {
             perchCheckTimer?.invalidate(); return
         }
         let current = PetController.windowInfo(for: id)
@@ -635,6 +678,7 @@ final class PetController: NSObject {
         perchCheckTimer?.invalidate()
         supportSurface = nil
         perchCompletion = nil
+        if state == .sleep { wake() }
         bird.flapWings(times: 6, fast: true)
         vel = CGVector(dx: CGFloat.random(in: -60...60), dy: 0)
         transition(to: .falling)
@@ -673,6 +717,7 @@ final class PetController: NSObject {
     // MARK: - Dragging
 
     func dragBegan() {
+        if state == .sleep { wake() }
         perchCheckTimer?.invalidate()
         supportSurface = nil
         perchCompletion = nil
@@ -757,13 +802,13 @@ final class PetController: NSObject {
     // MARK: - Speech
 
     /// 说话时朗读这句话(由 app 注入 Voice;未注入则只显示气泡)。
-    var speakAloud: ((String) -> Void)?
+    var speakAloud: ((String, String) -> Void)?
 
     func say(_ text: String, mood: String = "平静") {
         let display = PetController.desktopSpeech(from: text)
         guard !display.trimmingCharacters(in: .whitespaces).isEmpty else { return }
         bubble.show(text: display, near: window, avoiding: speechAvoidanceFrame)
-        speakAloud?(display)
+        speakAloud?(display, mood)
         // a little chirp gesture when speaking
         bird.setViewDirection(.front)
         bird.peckOnce()

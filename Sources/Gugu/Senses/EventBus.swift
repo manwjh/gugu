@@ -58,9 +58,13 @@ final class EventBus {
         }
     }
 
-    /// Read today's raw event lines (for the dream job).
-    nonisolated static func todayLines() -> [String] {
-        guard let text = try? String(contentsOf: Paths.eventsFile(), encoding: .utf8) else { return [] }
+    /// Read raw event lines for a day (for the dream job).
+    nonisolated static func lines(for date: Date) -> [String] {
+        guard let text = try? String(contentsOf: Paths.eventsFile(for: date), encoding: .utf8) else { return [] }
         return text.split(separator: "\n").map(String.init)
+    }
+
+    nonisolated static func todayLines() -> [String] {
+        lines(for: Date())
     }
 }
