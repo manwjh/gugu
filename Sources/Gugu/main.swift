@@ -270,7 +270,11 @@ final class GuguApp: NSObject, NSApplicationDelegate {
                                                        mood: self.affect.promptLine(),
                                                        localCapabilities: self.localCapabilitiesContext())
                 if result.action != "idle" { self.pet.perform(action: result.action) }
-                if !result.reply.isEmpty { self.pet.say(result.reply) }  // say→气泡+朗读
+                // 避免双重声音:如果动作包含 say 步骤,让动作自己说话,不再朗读 reply
+                let actionHasSpeech = self.actionContainsSay(result.action)
+                if !result.reply.isEmpty && !actionHasSpeech {
+                    self.pet.say(result.reply)
+                }
             } catch {
                 Log.info("voice", "对话失败: \(error)")
                 self.pet.say(L.voiceFailed)
@@ -283,6 +287,7 @@ final class GuguApp: NSObject, NSApplicationDelegate {
     /// 返回 true 表示已接管,调用方不必再走普通对话。
     func tryStartLearnMove(_ text: String) -> Bool {
         guard let intent = LearnMoveParser.parse(text) else { return false }
+        Log.info("learn_move", "识别到学习请求,意图:\(intent)")
         // 已经会了就直接演,不重复学。
         if let existing = MoveLibrary.shared.move(named: intent)
             ?? MoveLibrary.shared.matchTrigger(in: intent) {
@@ -298,10 +303,12 @@ final class GuguApp: NSObject, NSApplicationDelegate {
             do {
                 let draft = try await self.brain.learnMove(intent: intent)
                 guard draft.feasible, !draft.move.steps.isEmpty else {
+                    Log.info("learn_move", "放弃:feasible=\(draft.feasible) steps=\(draft.move.steps.count)")
                     self.pet.say(L.learnCantDo)
                     return
                 }
-                _ = try ProposalEngine().writeMoveProposal(draft.move)
+                let proposalURL = try ProposalEngine().writeMoveProposal(draft.move)
+                Log.info("learn_move", "已生成提案:\(proposalURL.lastPathComponent)")
                 EventBus.shared.post(kind: "learn_move",
                                      summary: "咕咕想学会「\(draft.move.name)」,生成了待批准提案",
                                      weight: 15)
@@ -313,6 +320,12 @@ final class GuguApp: NSObject, NSApplicationDelegate {
             }
         }
         return true
+    }
+
+    /// 检查动作是否包含 say 步骤(用于避免双重声音)。
+    private func actionContainsSay(_ actionName: String) -> Bool {
+        guard let move = MoveLibrary.shared.move(named: actionName) else { return false }
+        return move.steps.contains { $0.op == "say" }
     }
 
     /// 互动类型,驱动进度计数 + 引导/里程碑。
@@ -455,6 +468,18 @@ final class GuguApp: NSObject, NSApplicationDelegate {
         budget.dailyTokens = GrowthStage.adjustedDailyTokens(base: config.dailyTokens, stage: stage)
         pet.refreshGrowthStage()
         console.refreshMenu()
+    }
+
+    /// Re-read config.yaml after the settings window saves. Mirrors the
+    /// scheduler's hot-reload path so a manual save and a file edit converge.
+    func reloadConfigFromDisk() {
+        config = Config.load()
+        brain.config = config
+        L.current = config.language == "zh" ? .zh : .en
+        screenSensor.updateBlacklist(config.blacklistApps)
+        brain.reloadPersona()
+        refreshGrowthState()
+        Log.info("config", L.configReloaded)
     }
 }
 

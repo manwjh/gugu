@@ -58,7 +58,12 @@ final class Evolution {
         var proposal: Proposal?
         if target.order > oldStage.order {
             next.pending_stage = target.rawValue
-            proposal = writeStageProposal(from: oldStage, to: target, state: next)
+            // 查重:同一目标形态已有待批提案就不再生成,避免出现多个"长成雏鸟"。
+            if !stageProposalExists(target: target) {
+                proposal = writeStageProposal(from: oldStage, to: target, state: next)
+            } else {
+                proposal = nil
+            }
         }
 
         try next.saveRequired()
@@ -93,6 +98,7 @@ final class Evolution {
 
     func pendingProposals() -> [Proposal] {
         pruneExpiredProposals()
+        pruneStaleStageProposals()   // 清掉已达成/重复的阶段提案,避免菜单里卡一条点不动的
         let fm = FileManager.default
         guard let files = try? fm.contentsOfDirectory(at: Paths.proposals, includingPropertiesForKeys: nil) else {
             return []
@@ -122,8 +128,37 @@ final class Evolution {
         }
     }
 
-    private func eligibleStage(for state: PetState) -> GrowthStage {
-        let current = GrowthStage(rawStage: state.stage)
+    /// 解析阶段提案文件名里的目标形态:stage-<old>-to-<new>-<时间戳>.md
+    private func stageProposalTarget(_ url: URL) -> GrowthStage? {
+        let parts = url.deletingPathExtension().lastPathComponent.split(separator: "-")
+        guard parts.count >= 4, parts[0] == "stage", parts[2] == "to" else { return nil }
+        return GrowthStage(rawValue: String(parts[3]))
+    }
+
+    /// 是否已存在指向某目标形态的阶段提案(生成时查重用)。
+    private func stageProposalExists(target: GrowthStage) -> Bool {
+        let fm = FileManager.default
+        guard let files = try? fm.contentsOfDirectory(at: Paths.proposals, includingPropertiesForKeys: nil) else { return false }
+        return files.contains { $0.pathExtension == "md" && stageProposalTarget($0)?.order == target.order }
+    }
+
+    /// 清除过时的阶段提案:目标形态已达到或已超过(重复生成、或已被批准过的残留)。
+    /// 这类提案再也无法被批准(没有对应的待定阶段),留着只会在菜单里卡一条点不动的。
+    func pruneStaleStageProposals() {
+        let fm = FileManager.default
+        guard let files = try? fm.contentsOfDirectory(at: Paths.proposals, includingPropertiesForKeys: nil) else { return }
+        let current = GrowthStage(rawStage: PetState.load().stage)
+        for file in files where file.pathExtension == "md" {
+            guard let target = stageProposalTarget(file) else { continue }
+            if current.order >= target.order {
+                try? fm.removeItem(at: file)
+                Audit.record(kind: "proposal.prune", summary: "清除过时阶段提案:\(file.lastPathComponent)",
+                             detail: ["current": current.rawValue, "target": target.rawValue])
+            }
+        }
+    }
+
+    private func eligibleStage(for state: PetState) -> GrowthStage {        let current = GrowthStage(rawStage: state.stage)
         let skillCount = memory.skillCount()
         let highest: GrowthStage
 

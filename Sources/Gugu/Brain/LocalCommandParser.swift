@@ -7,6 +7,7 @@ struct LocalCommand: Equatable {
     enum Kind: String {
         case note
         case reminder
+        case research
     }
 
     let kind: Kind
@@ -20,14 +21,22 @@ enum LocalCommandParser {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
 
-        if let content = extract(afterAnyOf: ["记一下", "帮我记一下", "帮我记", "记个笔记", "记一笔"], in: trimmed),
+        if let content = extract(afterAnyOf: ["记一下", "帮我记一下", "帮我记", "记个笔记", "记一笔",
+                                               "note", "write down", "jot down", "take a note", "note this"], in: trimmed),
            !content.isEmpty {
             return LocalCommand(kind: .note, content: content, dueText: nil, deferred: isDeferred(trimmed))
         }
 
-        if let content = extract(afterAnyOf: ["提醒我", "到时候提醒我", "帮我提醒"], in: trimmed),
+        if let content = extract(afterAnyOf: ["提醒我", "到时候提醒我", "帮我提醒",
+                                               "remind me", "reminder", "set a reminder"], in: trimmed),
            !content.isEmpty {
             return LocalCommand(kind: .reminder, content: contentWithoutDue(content), dueText: dueText(from: content), deferred: isDeferred(trimmed))
+        }
+
+        if let content = extract(afterAnyOf: ["研究一下", "帮我研究", "查一下", "帮我查", "查查",
+                                               "research", "search", "look up", "find out", "search for"], in: trimmed),
+           !content.isEmpty {
+            return LocalCommand(kind: .research, content: content, dueText: nil, deferred: isDeferred(trimmed))
         }
 
         return nil
@@ -45,8 +54,10 @@ enum LocalCommandParser {
     }
 
     private static func dueText(from content: String) -> String? {
-        let markers = ["明天", "后天", "今晚", "今天", "下周", "周一", "周二", "周三", "周四", "周五", "周六", "周日"]
-        for marker in markers where content.contains(marker) {
+        let markers = ["明天", "后天", "今晚", "今天", "下周", "周一", "周二", "周三", "周四", "周五", "周六", "周日",
+                       "tomorrow", "tonight", "today", "next week", "monday", "tuesday", "wednesday",
+                       "thursday", "friday", "saturday", "sunday"]
+        for marker in markers where content.lowercased().contains(marker.lowercased()) {
             return marker
         }
         return nil
@@ -54,13 +65,15 @@ enum LocalCommandParser {
 
     private static func contentWithoutDue(_ content: String) -> String {
         var out = content
-        for marker in ["明天", "后天", "今晚", "今天"] {
-            out = out.replacingOccurrences(of: marker, with: "")
+        for marker in ["明天", "后天", "今晚", "今天", "tomorrow", "tonight", "today"] {
+            out = out.replacingOccurrences(of: marker, with: "", options: .caseInsensitive)
         }
         return out.trimmingCharacters(in: CharacterSet(charactersIn: " ：:，,。!！?？、 \n\t"))
     }
 
     private static func isDeferred(_ text: String) -> Bool {
-        ["今晚", "夜里", "晚上", "睡觉时", "有空时", "待会"].contains { text.contains($0) }
+        let lower = text.lowercased()
+        return ["今晚", "夜里", "晚上", "睡觉时", "有空时", "待会",
+                "tonight", "later", "when free", "when available", "this evening"].contains { lower.contains($0.lowercased()) }
     }
 }

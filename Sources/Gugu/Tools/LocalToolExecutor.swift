@@ -60,6 +60,11 @@ struct LocalToolExecutor {
                     text: required("text", in: call),
                     due: optional("due", in: call)
                 )
+            case "web_search.request":
+                return try webSearchRequest(
+                    query: required("query", in: call),
+                    reason: optional("reason", in: call)
+                )
             default:
                 let result = Result(
                     tool: call.name,
@@ -158,8 +163,36 @@ struct LocalToolExecutor {
         return allowed(tool: tool, message: scheduledMessage, id: id, file: url)
     }
 
-    private func required(_ key: String, in call: ToolCall) throws -> String {
-        guard let value = call.arguments[key] else {
+    /// 联网搜索请求。**框架就绪,但当前只把请求记录到本地,尚未真正出网。**
+    ///
+    /// 这是"共同能动性"的最小落地:权限门控 + 审计 + 队列(见 AutonomyTaskQueue.research)
+    /// 全链路打通,唯独"出网"那一步留了一个干净的接口(`WebSearchProvider`)。
+    /// 将来要真联网,只需注入一个真正发请求的 provider——隐私边界(B1/B2)在这一层守住:
+    /// 默认 provider 不发任何网络请求,只在本机留痕。
+    func webSearchRequest(query: String, reason: String? = nil) throws -> Result {
+        let tool = "web_search.request"
+        guard config.toolWebSearch else {
+            return denied(tool: tool, message: L.webSearchNotAuthorized)
+        }
+        let cleanQuery = normalized(query)
+        guard !cleanQuery.isEmpty else {
+            throw ToolError.invalidArgument(tool: tool, argument: "query")
+        }
+        let id = makeID(prefix: "research")
+        let url = Paths.root.appendingPathComponent("research_requests.jsonl")
+        var record: [String: Any] = [
+            "id": id,
+            "t": iso.string(from: Date()),
+            "query": cleanQuery,
+            "status": "pending",           // 出网接入后由 provider 改写为 fetched/failed
+        ]
+        let cleanReason = normalized(reason ?? "")
+        if !cleanReason.isEmpty { record["reason"] = cleanReason }
+        try appendJSONLine(record, to: url, tool: tool)
+        return allowed(tool: tool, message: L.webSearchRecorded, id: id, file: url)
+    }
+
+    private func required(_ key: String, in call: ToolCall) throws -> String {        guard let value = call.arguments[key] else {
             throw ToolError.missingArgument(tool: call.name, argument: key)
         }
         return value

@@ -12,6 +12,7 @@ final class Console: NSObject, NSWindowDelegate {
     private var chatUserPositioned = false
     private var chatInFlight = 0
     private let quickPanel = NSPopover()
+    private var settingsController: SettingsWindowController?
     private var defaultChatPlaceholder: String { L.chatPlaceholder }
 
     init(app: GuguApp) {
@@ -68,6 +69,7 @@ final class Console: NSObject, NSWindowDelegate {
         approve.isEnabled = !Evolution(memory: Memory()).pendingProposals().isEmpty
         menu.addItem(approve)
         menu.addItem(makeItem(L.menuOpenConfig, #selector(openConfigDir), "", icon: "folder"))
+        menu.addItem(makeItem(L.menuSettings, #selector(openSettings), ",", icon: "gearshape"))
         menu.addItem(.separator())
         let langTitle = L.current == .en ? L.menuLangZH : L.menuLangEN
         menu.addItem(makeItem(langTitle, #selector(toggleLanguage), "", icon: "globe"))
@@ -144,27 +146,39 @@ final class Console: NSObject, NSWindowDelegate {
         let actions = NSMenuItem(title: L.menuActions, action: nil, keyEquivalent: "")
         actions.image = symbol("star")
         let sub = NSMenu()
-        sub.addItem(makeItem(L.menuDance, #selector(dancePet), "", icon: "music.note"))
-        sub.addItem(makeItem(L.menuHop, #selector(hopPet), "", icon: "arrow.up.circle"))
-        sub.addItem(makeItem(L.menuFly, #selector(flyPet), "", icon: "wind"))
-        sub.addItem(makeItem(L.menuPerch, #selector(perchPet), "", icon: "rectangle.on.rectangle"))
-        sub.addItem(makeItem(L.menuSettle, #selector(settlePet), "", icon: "chair"))
-        sub.addItem(makeItem(L.menuGroom, #selector(groomPet), "", icon: "sparkles"))
-        sub.addItem(makeItem(L.menuSleep, #selector(sleepPet), "", icon: "moon"))
-        // 学会的动作(动作进化产物)动态列出,点一下就演。
-        let learned = MoveLibrary.shared.learnedMoves
-        if !learned.isEmpty {
-            sub.addItem(.separator())
-            for move in learned {
-                let item = NSMenuItem(title: "✨ \(move.name)", action: #selector(performLearnedMoveItem(_:)), keyEquivalent: "")
-                item.target = self
-                item.representedObject = move.name
-                item.image = symbol("wand.and.stars")
-                sub.addItem(item)
-            }
+        // 多列网格:内置动作 + 学会的动作一起平铺,容纳更多动作而不必竖排一长条。
+        var gridItems: [(label: String, name: String)] = [
+            (L.menuDance, "dance"), (L.menuHop, "hop"), (L.menuFly, "fly"),
+            (L.menuPerch, "perch"), (L.menuSettle, "settle"), (L.menuGroom, "groom"),
+            (L.menuSleep, "sleep"),
+        ]
+        for move in MoveLibrary.shared.learnedMoves {
+            gridItems.append((label: "✨\(move.name)", name: move.name))
         }
+        let grid = ActionGridView(items: gridItems, columns: 3)
+        grid.onPick = { [weak self] name in self?.app?.pet.perform(action: name) }
+        let gridItem = NSMenuItem()
+        gridItem.view = grid
+        sub.addItem(gridItem)
         actions.submenu = sub
         menu.addItem(actions)
+        // 待批准提案:逐条列出标题,点哪条批哪条(不依赖顶部状态栏图标——
+        // 带刘海的 Mac 上它常被挤掉)。批准后菜单会刷新,已批的自然消失。
+        let pending = Evolution(memory: Memory()).pendingProposals()
+        if !pending.isEmpty {
+            menu.addItem(.separator())
+            let header = NSMenuItem(title: "\(L.menuProposals)(\(pending.count))", action: nil, keyEquivalent: "")
+            header.isEnabled = false
+            header.image = symbol("tray.full")
+            menu.addItem(header)
+            for proposal in pending {
+                let item = NSMenuItem(title: "  ✓ \(proposal.title)", action: #selector(approveProposalItem(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = proposal.path
+                item.image = symbol("checkmark.seal")
+                menu.addItem(item)
+            }
+        }
         menu.addItem(.separator())
         menu.addItem(makeItem(L.menuQuit, #selector(quit), "q", icon: "power"))
         return menu
@@ -242,35 +256,46 @@ final class Console: NSObject, NSWindowDelegate {
 
     @objc func approveNextProposal() {
         guard let app else { return }
-        let proposals = Evolution(memory: app.brain.memory).pendingProposals()
-        if let proposal = proposals.first {
-            do {
-                let applied = try ProposalEngine().applyApprovedProposal(at: proposal.path)
-                app.config = Config.load()
-                app.brain.config = app.config
-                app.brain.reloadPersona()
-                app.refreshGrowthState()
-                app.screenSensor.updateBlacklist(app.config.blacklistApps)
-                if let newStage = applied.newStage {
-                    app.pet.celebrateEvolution(to: newStage)
-                } else {
-                    app.pet.say(L.proposalApproved(applied.title))
-                }
-                // 学会新动作:计入进度(驱动里程碑),并立刻演一遍给主人看。
-                if proposal.path.lastPathComponent.hasPrefix("move-") {
-                    app.afterInteraction(.learnedMove, surface: false)
-                    let moveName = applied.target.deletingPathExtension().lastPathComponent
-                    if MoveLibrary.shared.move(named: moveName) != nil {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak app] in
-                            app?.pet.perform(action: moveName)
-                        }
+        if let proposal = Evolution(memory: app.brain.memory).pendingProposals().first {
+            approve(at: proposal.path)
+        }
+    }
+
+    /// 批准右键菜单里点选的那一条(representedObject 携带提案文件 URL)。
+    @objc func approveProposalItem(_ sender: NSMenuItem) {
+        guard let url = sender.representedObject as? URL else { return }
+        approve(at: url)
+    }
+
+    /// 批准指定提案文件并刷新一切相关状态。供"批准下一个"与"逐条批准"共用。
+    private func approve(at path: URL) {
+        guard let app else { return }
+        do {
+            let applied = try ProposalEngine().applyApprovedProposal(at: path)
+            app.config = Config.load()
+            app.brain.config = app.config
+            app.brain.reloadPersona()
+            app.refreshGrowthState()
+            app.screenSensor.updateBlacklist(app.config.blacklistApps)
+            if let newStage = applied.newStage {
+                app.pet.celebrateEvolution(to: newStage)
+            } else {
+                app.pet.say(L.proposalApproved(applied.title))
+            }
+            // 学会新动作:计入进度(驱动里程碑),并立刻演一遍给主人看。
+            if path.lastPathComponent.hasPrefix("move-") {
+                app.afterInteraction(.learnedMove, surface: false)
+                let moveName = applied.target.deletingPathExtension().lastPathComponent
+                if MoveLibrary.shared.move(named: moveName) != nil {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak app] in
+                        app?.pet.perform(action: moveName)
                     }
                 }
-                EventBus.shared.post(kind: "proposal", summary: L.eventProposalApproved(applied.title), weight: 25)
-            } catch {
-                app.pet.say(L.proposalFailed)
-                Log.info("proposal", "批准失败: \(error)")
             }
+            EventBus.shared.post(kind: "proposal", summary: L.eventProposalApproved(applied.title), weight: 25)
+        } catch {
+            app.pet.say(L.proposalFailed)
+            Log.info("proposal", "批准失败: \(error)")
         }
         refreshMenu()
     }
@@ -298,6 +323,14 @@ final class Console: NSObject, NSWindowDelegate {
 
     @objc func openConfigDir() {
         NSWorkspace.shared.open(Paths.root)
+    }
+
+    @objc func openSettings() {
+        guard let app else { return }
+        if settingsController == nil {
+            settingsController = SettingsWindowController(app: app)
+        }
+        settingsController?.show()
     }
 
     private func voiceToggleTitle() -> String {
@@ -530,10 +563,18 @@ final class Console: NSObject, NSWindowDelegate {
                 if result.action != "idle" {
                     app.pet.perform(action: result.action)
                 }
-                if !result.reply.isEmpty {
+                // 避免双重声音:如果动作包含 say 步骤,让动作自己说话,不再朗读 reply
+                let actionHasSpeech = MoveLibrary.shared.move(named: result.action)?.steps.contains { $0.op == "say" } ?? false
+                if !result.reply.isEmpty && !actionHasSpeech {
                     app.pet.say(result.reply)
                 } else if result.action != "idle" {
                     setChatStatus(Console.actionLabel(result.action), transient: true)
+                } else {
+                    // 兜底:模型既没话说也没动作(空 speech + idle)。不再静默——
+                    // 给一个轻微的"我听到了"反应,聊天框也提示一下,避免"反应丢失"。
+                    app.pet.bird.tiltHead(true)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak app] in app?.pet.bird.tiltHead(false) }
+                    setChatStatus(L.chatNoReply, transient: true)
                 }
             } catch {
                 setChatStatus(L.chatFailed, transient: true)
@@ -721,6 +762,7 @@ private final class QuickPanelController: NSViewController {
             (L.menuHeartbeatDebug, "heart.text.square", #selector(Console.forceHeartbeat)),
             (L.menuDreamDebug, "moon.zzz", #selector(Console.forceDream)),
             (L.menuOpenConfig, "folder", #selector(Console.openConfigDir)),
+            (L.menuSettings, "gearshape", #selector(Console.openSettings)),
             (L.menuQuit, "power", #selector(Console.quit)),
         ]
         for item in menuItems {
@@ -846,6 +888,51 @@ private final class QuickPanelController: NSViewController {
         let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)
         image?.isTemplate = true
         return image
+    }
+}
+
+// MARK: - ActionGridView (multi-column grid of action buttons for a menu item)
+
+/// 一个塞进 NSMenuItem.view 的多列动作网格。NSMenu 原生只能竖排单列;
+/// 用自定义视图就能多列平铺,容纳内置 + 学会的全部动作。点按钮即演动作并收起菜单。
+@MainActor
+private final class ActionGridView: NSView {
+    private var names: [String] = []
+    var onPick: ((String) -> Void)?
+
+    init(items: [(label: String, name: String)], columns: Int = 3) {
+        super.init(frame: .zero)
+        let cellW: CGFloat = 96, cellH: CGFloat = 28, gap: CGFloat = 4, margin: CGFloat = 8
+        let cols = max(1, columns)
+        let rows = max(1, Int(ceil(Double(items.count) / Double(cols))))
+        let width = margin * 2 + CGFloat(cols) * cellW + CGFloat(cols - 1) * gap
+        let height = margin * 2 + CGFloat(rows) * cellH + CGFloat(rows - 1) * gap
+        frame = NSRect(x: 0, y: 0, width: width, height: height)
+
+        for (i, item) in items.enumerated() {
+            let col = i % cols, row = i / cols
+            let b = NSButton(frame: NSRect(
+                x: margin + CGFloat(col) * (cellW + gap),
+                y: height - margin - cellH - CGFloat(row) * (cellH + gap),
+                width: cellW, height: cellH))
+            b.title = item.label
+            b.bezelStyle = .rounded
+            b.font = .systemFont(ofSize: 12)
+            b.lineBreakMode = .byTruncatingTail
+            b.tag = i
+            b.target = self
+            b.action = #selector(tap(_:))
+            names.append(item.name)
+            addSubview(b)
+        }
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    @objc private func tap(_ sender: NSButton) {
+        let name = names[sender.tag]
+        enclosingMenuItem?.menu?.cancelTracking()   // 收起菜单
+        onPick?(name)
     }
 }
 

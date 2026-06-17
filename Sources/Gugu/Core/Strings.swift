@@ -100,6 +100,8 @@ enum L {
     static var chatPlaceholder: String { s("对咕咕说…", "Say something to Gugu…") }
     static var chatThinking: String { s("咕咕在想...", "Gugu is thinking…") }
     static var chatFailed: String { s("咕咕没听清。", "Gugu didn't catch that.") }
+    /// 模型回了空(既没话也没动作)时的轻量占位,避免"反应丢失"。
+    static var chatNoReply: String { s("(咕咕歪头看了看你)", "(Gugu tilts its head at you)") }
     static var chatDragTooltip: String { s("拖动输入框", "Drag input") }
     static var chatCloseTooltip: String { s("关闭输入框", "Close input") }
 
@@ -315,6 +317,15 @@ enum L {
         s("reminders.add 未授权:请先在配置中开启 tools.reminders",
           "reminders.add not authorized: enable tools.reminders in config first")
     }
+    static var webSearchNotAuthorized: String {
+        s("web_search 未授权:请先在配置中开启 tools.web_search",
+          "web_search not authorized: enable tools.web_search in config first")
+    }
+    /// 联网搜索目前只记录请求、尚未真正出网(框架就绪,出网待接入)。
+    static var webSearchRecorded: String {
+        s("我把要查的记下了,等我能上网了就去查。",
+          "Noted what to look up — I'll search once I can go online.")
+    }
     static var reminderNotificationTitle: String { s("咕咕提醒事项", "Gugu Reminder") }
     /// Date format for the scheduled-reminder confirmation.
     static var reminderDateFormat: String { s("M月d日 HH:mm", "MMM d, HH:mm") }
@@ -422,6 +433,47 @@ enum L {
     // MARK: - Scheduler / config
 
     static var configReloaded: String { s("配置已重新加载", "Config reloaded") }
+
+    // MARK: - Structured-output hint (OpenAI-compatible providers)
+
+    static var schemaHintHeader: String {
+        s("只输出一个 JSON 对象,包含且仅包含以下字段:",
+          "Output only a single JSON object with exactly these fields:")
+    }
+    static var schemaHintRequired: String { s("(必填)", " (required)") }
+    static var schemaHintGeneric: String {
+        s("只输出一个合法的 JSON 对象,不要包含其它文字。",
+          "Output only a valid JSON object, with no other text.")
+    }
+
+    // MARK: - Settings window
+
+    static var menuSettings: String { s("设置…", "Settings…") }
+    static var settingsTitle: String { s("咕咕设置", "Gugu Settings") }
+    static var settingsProvider: String { s("协议", "Protocol") }
+    static var settingsProviderAnthropic: String { s("Anthropic", "Anthropic") }
+    static var settingsProviderOpenAI: String { s("OpenAI 兼容", "OpenAI-compatible") }
+    static var settingsURL: String { s("接口地址", "API URL") }
+    static var settingsKey: String { s("密钥", "API Key") }
+    static var settingsModel: String { s("模型", "Model") }
+    static var settingsAdvanced: String { s("高级", "Advanced") }
+    static var settingsTierModels: String { s("分层模型(留空=用上面的模型)", "Per-tier models (blank = use base)") }
+    static var settingsInheritsBase: String { s("继承基础模型", "inherits base model") }
+    static var settingsSparkOff: String { s("留空=不启用灵光", "blank = spark off") }
+    static var settingsInstinctModel: String { s("心跳层", "Instinct") }
+    static var settingsConversationModel: String { s("对话层", "Conversation") }
+    static var settingsDreamModel: String { s("梦境层", "Dream") }
+    static var settingsSparkModel: String { s("灵光层", "Spark") }
+    static var settingsMaxTokens: String { s("输出上限(tokens)", "Max output (tokens)") }
+    static var settingsInstinctTokens: String { s("心跳层", "Instinct") }
+    static var settingsConversationTokens: String { s("对话层", "Conversation") }
+    static var settingsDreamTokens: String { s("梦境层", "Dream") }
+    static var settingsSparkTokens: String { s("灵光层", "Spark") }
+    static var settingsBudget: String { s("预算", "Budget") }
+    static var settingsDailyTokens: String { s("每日 tokens", "Daily tokens") }
+    static var settingsSave: String { s("保存", "Save") }
+    static var settingsCancel: String { s("取消", "Cancel") }
+    static var settingsSaveFailed: String { s("保存失败", "Save failed") }
 
     // MARK: - Listener wake words (used for matching, not display)
 

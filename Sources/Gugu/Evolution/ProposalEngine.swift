@@ -47,11 +47,17 @@ final class ProposalEngine {
         let kind = proposal.meta["kind"] ?? "stage"
         switch kind {
         case "stage":
+            // 过时的阶段提案(没有待定阶段——通常是重复或已被批准过的残留):
+            // 不报错卡死,直接归档清除,菜单里那条点了就消失。
             guard PetState.load().pending_stage != nil else {
-                throw ProposalError.missingField("pending_stage")
+                archiveAppliedProposal(url)
+                Audit.record(kind: "proposal.apply", summary: "清除过时阶段提案:\(proposal.title)",
+                             detail: ["proposal": url.lastPathComponent, "reason": "no pending_stage"])
+                return Applied(title: proposal.title, target: Paths.state, snapshot: Paths.state, newStage: nil)
             }
             let snapshot = try snapshotFile(Paths.state)
             guard Evolution(memory: Memory()).approvePendingStage() else {
+                archiveAppliedProposal(url)
                 throw ProposalError.missingField("pending_stage")
             }
             archiveAppliedProposal(url)
@@ -233,6 +239,7 @@ final class ProposalEngine {
         "tools.notes",
         "tools.reminders",
         "tools.local_notifications",
+        "tools.web_search",
     ]
 
     private func validateConfigValue(key: String, value: String) throws {

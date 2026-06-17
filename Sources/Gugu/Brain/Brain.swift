@@ -36,8 +36,21 @@ final class Brain {
         personaText + "\n\n" + L.llmLanguageDirective
     }
 
-    private var client: AnthropicClient {
-        AnthropicClient(baseURL: config.apiURL, apiKey: config.apiKey)
+    /// Single-call transport, chosen by `api.provider`. Default is Anthropic.
+    private var client: LLMClient {
+        config.apiProvider == "openai"
+            ? OpenAIClient(baseURL: config.apiURL, apiKey: config.apiKey)
+            : AnthropicClient(baseURL: config.apiURL, apiKey: config.apiKey)
+    }
+
+    /// Batch transport — Anthropic-only. OpenAI mode has no batch path, so the
+    /// dream layer must run synchronously there (Scheduler already branches on
+    /// `dreamUseBatch`; this guard is a defensive backstop).
+    private func batchClient() throws -> AnthropicClient {
+        guard config.apiProvider != "openai" else {
+            throw LLMError.malformed("batch unsupported in openai provider mode")
+        }
+        return AnthropicClient(baseURL: config.apiURL, apiKey: config.apiKey)
     }
 
     // MARK: - L2 Heartbeat
@@ -96,24 +109,26 @@ final class Brain {
         """
     }
 
-    func heartbeat(rhythm: String, screen: String, affect: String, skills: [String]) async throws -> HeartbeatDecision {
+    func heartbeat(rhythm: String, screen: String, affect: String, skills: [String], useSpark: Bool = false) async throws -> HeartbeatDecision {
         let userMsg = heartbeatUserMessage(rhythm: rhythm, screen: screen, affect: affect, skills: skills)
+        // 灵光时机:临时借用更强的模型,并放宽一点输出长度,让这一句更有灵性。
+        let tier = useSpark && config.sparkEnabled ? config.spark : config.instinct
         let reply = try await client.create(
-            model: config.instinct.id,
-            maxTokens: config.instinct.maxTokens,
+            model: tier.id,
+            maxTokens: tier.maxTokens,
             system: systemPrompt,
             messages: [["role": "user", "content": userMsg]],
             schema: Brain.heartbeatSchema
         )
         budget.record(inputChars: personaText.count + userMsg.count,
-                      outputChars: reply.text.count, tier: config.instinct)
+                      outputChars: reply.text.count, tier: tier)
         return try Brain.parseHeartbeat(reply.text)
     }
 
     static func parseHeartbeat(_ text: String) throws -> HeartbeatDecision {
         guard let data = extractJSON(text)?.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw AnthropicClient.APIError.malformed("heartbeat json: \(text)")
+            throw LLMError.malformed("heartbeat json: \(text)")
         }
         return HeartbeatDecision(
             mood: obj["mood"] as? String ?? "平静",
@@ -171,6 +186,11 @@ final class Brain {
             if !result.allowed {
                 _ = ProposalEngine().writeToolPermissionProposal(title: "请求学会记提醒", key: "tools.reminders")
             }
+        case .research:
+            result = executor.execute(.init(name: "web_search.request", arguments: ["query": command.content]))
+            if !result.allowed {
+                _ = ProposalEngine().writeToolPermissionProposal(title: "请求学会联网查东西", key: "tools.web_search")
+            }
         }
 
         let reply: String
@@ -191,6 +211,7 @@ final class Brain {
             switch command.kind {
             case .note: kind = .note
             case .reminder: kind = .reminder
+            case .research: kind = .research
             }
             let task = try AutonomyTaskQueue().enqueue(kind: kind, title: command.content, body: command.dueText ?? "")
             return L.deferredTask(task.title)
@@ -257,6 +278,11 @@ final class Brain {
             aside = (obj["aside"] as? String) ?? ""
             action = (obj["action"] as? String) ?? "idle"
         }
+        // Normalize whitespace-only fields to empty so a blank speech degrades to
+        // an action-only reply (no empty bubble) instead of showing whitespace.
+        replyText = replyText.trimmingCharacters(in: .whitespacesAndNewlines)
+        aside = aside.trimmingCharacters(in: .whitespacesAndNewlines)
+        Log.info("chat", "解析:action=\(action) reply空=\(replyText.isEmpty) aside空=\(aside.isEmpty) | 原文前100: \(reply.text.prefix(100))")
         let logText = [aside.isEmpty ? nil : "(\(aside))", replyText.isEmpty ? nil : replyText]
             .compactMap { $0 }
             .joined(separator: " ")
@@ -329,6 +355,22 @@ final class Brain {
         let feasible: Bool
     }
 
+    /// 明确告诉模型 steps 的 JSON 形状 + 一个完整示例。
+    /// 关键:很多 OpenAI 兼容通道只支持 response_format=json_object(不强制 json_schema),
+    /// 仅靠字段名模型会把 steps 猜成字符串数组。给出"每步是带 op 的对象"的实例可根治。
+    static var moveFormatSpec: String {
+        let intro = L.current == .zh
+            ? "严格只输出一个 JSON 对象。steps 必须是数组,每个元素是一个对象且必须含 \"op\" 字段;按需带参数。可用 op 与参数:"
+            : "Output strictly one JSON object. \"steps\" must be an array whose every element is an object containing an \"op\" field, with optional params. Available ops and params:"
+        return """
+        \(intro)
+        move(dx,dy,dur) rotate(by,dur) scale(x,y,dur) flap(times,fast) hop(height,dur) wait(dur) say(text) view(dir) tilt(on) blush(on) peck groom
+
+        \(L.current == .zh ? "示例" : "Example"):
+        {"name":"招手","trigger":"招手","feasible":true,"steps":[{"op":"view","dir":"front"},{"op":"flap","times":2,"fast":true},{"op":"wait","dur":0.3},{"op":"flap","times":2,"fast":true},{"op":"say","text":"嗨"}]}
+        """
+    }
+
     /// 让模型把主人口头描述的动作翻译成一段元动作编排(只能用白名单基元)。
     /// 这一步是"它居然学会了"的灵光时刻——低频、择机、短输出(公理 A2)。
     /// 返回的草稿仍需经 move_add 提案 + 主人批准才会真正注册(公理 B2)。
@@ -338,45 +380,55 @@ final class Brain {
         let reply = try await client.create(
             model: config.instinct.id,
             maxTokens: 600,
-            system: system + "\n\n" + L.llmLanguageDirective,
+            system: system + "\n\n" + Brain.moveFormatSpec + "\n\n" + L.llmLanguageDirective,
             messages: [["role": "user", "content": user]],
             schema: Brain.moveSchema
         )
         budget.record(inputChars: system.count + user.count,
                       outputChars: reply.text.count, tier: config.instinct)
-        return try Brain.parseMoveDraft(reply.text, fallbackName: intent)
+        let draft = try Brain.parseMoveDraft(reply.text, fallbackName: intent)
+        Log.info("learn_move", "草稿:name=\(draft.move.name) feasible=\(draft.feasible) steps=\(draft.move.steps.count) | 原文前120: \(reply.text.prefix(120))")
+        return draft
     }
 
     static func parseMoveDraft(_ text: String, fallbackName: String) throws -> LearnedMoveDraft {
         guard let json = extractJSON(text), let data = json.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw AnthropicClient.APIError.malformed("move json: \(text)")
+            throw LLMError.malformed("move json: \(text)")
         }
         let name = (obj["name"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? fallbackName
         let trigger = (obj["trigger"] as? String) ?? name
         let feasible = (obj["feasible"] as? Bool) ?? true
-        let rawSteps = (obj["steps"] as? [[String: Any]]) ?? []
-        let steps: [MoveStep] = rawSteps.compactMap { dict in
-            guard let op = dict["op"] as? String else { return nil }
-            return MoveStep(
-                op: op,
-                dx: dict["dx"] as? Double,
-                dy: dict["dy"] as? Double,
-                by: dict["by"] as? Double,
-                x: dict["x"] as? Double,
-                y: dict["y"] as? Double,
-                dur: dict["dur"] as? Double,
-                times: dict["times"] as? Int,
-                fast: dict["fast"] as? Bool,
-                height: dict["height"] as? Double,
-                text: dict["text"] as? String,
-                dir: dict["dir"] as? String,
-                on: dict["on"] as? Bool
-            )
-        }
+        let steps = Brain.parseSteps(obj["steps"])
         let move = Move(name: name, trigger: trigger, steps: steps, origin: "learned",
                         createdAt: ISO8601DateFormatter().string(from: Date()))
         return LearnedMoveDraft(move: move, feasible: feasible)
+    }
+
+    /// 容错解析 steps:正常是对象数组 [{op,…}];也兼容模型偶尔把它给成
+    /// 纯字符串数组 ["flap","wait"](OpenAI json_object 模式下常见)。数字用
+    /// NSNumber 桥接读取,避免 JSON 整数/浮点混用时 `as? Double`/`as? Int` 漏读。
+    static func parseSteps(_ raw: Any?) -> [MoveStep] {
+        func num(_ v: Any?) -> Double? { (v as? NSNumber)?.doubleValue }
+        func int(_ v: Any?) -> Int? { (v as? NSNumber)?.intValue }
+        if let dicts = raw as? [[String: Any]] {
+            return dicts.compactMap { dict in
+                guard let op = dict["op"] as? String else { return nil }
+                return MoveStep(
+                    op: op,
+                    dx: num(dict["dx"]), dy: num(dict["dy"]), by: num(dict["by"]),
+                    x: num(dict["x"]), y: num(dict["y"]), dur: num(dict["dur"]),
+                    times: int(dict["times"]), fast: dict["fast"] as? Bool,
+                    height: num(dict["height"]), text: dict["text"] as? String,
+                    dir: dict["dir"] as? String, on: dict["on"] as? Bool
+                )
+            }
+        }
+        if let names = raw as? [String] {
+            // 退化形状:只给了基元名,补成最简步骤(参数走 clamp 默认)。
+            return names.compactMap { MetaOp(rawValue: $0) != nil ? MoveStep(op: $0) : nil }
+        }
+        return []
     }
 
     // MARK: - L4 Dream (nightly distillation)
@@ -436,7 +488,7 @@ final class Brain {
 
         guard let data = Brain.extractJSON(reply.text)?.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw AnthropicClient.APIError.malformed("dream json: \(reply.text)")
+            throw LLMError.malformed("dream json: \(reply.text)")
         }
 
         return try applyDreamObject(obj, for: date)
@@ -445,7 +497,7 @@ final class Brain {
     func submitDreamBatch(for date: Date = Date()) async throws -> DreamBatchState {
         let customID = "dream-\(Memory.dayString(for: date))-\(ISO8601DateFormatter().string(from: Date()))"
         let user = dreamPrompt(for: date)
-        let batch = try await client.createMessageBatch(
+        let batch = try await batchClient().createMessageBatch(
             customID: customID,
             model: config.dream.id,
             maxTokens: config.dream.maxTokens,
@@ -470,7 +522,7 @@ final class Brain {
 
     func refreshDreamBatchStatus() async throws -> DreamBatchState? {
         guard var state = DreamBatchStore.load() else { return nil }
-        let batch = try await client.retrieveMessageBatch(id: state.batchID)
+        let batch = try await batchClient().retrieveMessageBatch(id: state.batchID)
         state.status = batch.processingStatus
         state.resultURL = batch.resultURL
         DreamBatchStore.save(state)
@@ -483,7 +535,7 @@ final class Brain {
         guard Brain.isBatchCompleted(state.status), let resultURL = state.resultURL else {
             return nil
         }
-        let resultsText = try await client.downloadBatchResults(from: resultURL)
+        let resultsText = try await batchClient().downloadBatchResults(from: resultURL)
         let dreamText = try Brain.extractDreamTextFromBatchResults(resultsText, customID: state.customID)
         return try applyDreamBatchText(dreamText, for: state.memoryDate)
     }
@@ -491,7 +543,7 @@ final class Brain {
     func applyDreamBatchText(_ text: String, for date: Date = Date()) throws -> DreamResult {
         guard let data = Brain.extractJSON(text)?.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw AnthropicClient.APIError.malformed("dream batch json: \(text)")
+            throw LLMError.malformed("dream batch json: \(text)")
         }
         let result = try applyDreamObject(obj, for: date)
         DreamBatchStore.clear()
@@ -524,7 +576,7 @@ final class Brain {
                     return text
                 }
                 if let error = result["error"] as? [String: Any] {
-                    throw AnthropicClient.APIError.malformed("batch request failed: \(error)")
+                    throw LLMError.malformed("batch request failed: \(error)")
                 }
             }
             if let text = extractTextBlocks(from: obj) {
@@ -534,7 +586,7 @@ final class Brain {
         if let json = extractJSON(text) {
             return json
         }
-        throw AnthropicClient.APIError.malformed("dream batch result jsonl: \(text)")
+        throw LLMError.malformed("dream batch result jsonl: \(text)")
     }
 
     private static func extractTextBlocks(from obj: [String: Any]) -> String? {

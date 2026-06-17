@@ -1,32 +1,16 @@
 import Foundation
 
 /// Minimal Anthropic Messages API client over URLSession (no SDK for Swift).
-/// Works against the relay channel (Anthropic-compatible shape).
+/// Works against the relay channel (Anthropic-compatible shape). Default provider.
 @MainActor
-struct AnthropicClient: Sendable {
+struct AnthropicClient: LLMClient {
     let baseURL: String
     let apiKey: String
-
-    struct Reply: Sendable {
-        let text: String
-        let stopReason: String
-    }
 
     struct Batch: Sendable {
         let id: String
         let processingStatus: String
         let resultURL: String?
-    }
-
-    enum APIError: Error, CustomStringConvertible {
-        case http(Int, String)
-        case malformed(String)
-        var description: String {
-            switch self {
-            case .http(let c, let b): return "HTTP \(c): \(b.prefix(300))"
-            case .malformed(let s): return "malformed response: \(s.prefix(300))"
-            }
-        }
     }
 
     /// One messages.create call. `system` may carry cache_control.
@@ -38,7 +22,7 @@ struct AnthropicClient: Sendable {
         messages: [[String: Any]],
         schema: [String: Any]? = nil,
         retries: Int = 2
-    ) async throws -> Reply {
+    ) async throws -> LLMReply {
         var body: [String: Any] = [
             "model": model,
             "max_tokens": maxTokens,
@@ -56,10 +40,10 @@ struct AnthropicClient: Sendable {
         while true {
             do {
                 return try await doRequest(body: body)
-            } catch let e as APIError {
-                if case .http(let code, _) = e, (code == 429 || code >= 500), attempt < retries {
+            } catch let e as LLMError {
+                if LLMRetry.isRetriable(e), attempt < retries {
                     attempt += 1
-                    let delay = pow(2.0, Double(attempt)) + Double.random(in: 0...1)
+                    let delay = LLMRetry.backoffSeconds(attempt: attempt)
                     try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                     continue
                 }
@@ -68,32 +52,31 @@ struct AnthropicClient: Sendable {
         }
     }
 
-    private func doRequest(body: [String: Any]) async throws -> Reply {
+    private func doRequest(body: [String: Any]) async throws -> LLMReply {
         guard let url = URL(string: "\(baseURL)/v1/messages") else {
-            throw APIError.malformed("bad url")
+            throw LLMError.malformed("bad url")
         }
-        var req = URLRequest(url: url, timeoutInterval: 90)
+        var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (data, resp) = try await URLSession.shared.data(for: req)
-        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        let (data, code) = try await LLMTransport.send(req, label: "anthropic \(body["model"] as? String ?? "")")
         let bodyText = String(data: data, encoding: .utf8) ?? ""
         guard (200..<300).contains(code) else {
-            throw APIError.http(code, bodyText)
+            throw LLMError.http(code, bodyText)
         }
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let content = obj["content"] as? [[String: Any]] else {
-            throw APIError.malformed(bodyText)
+            throw LLMError.malformed(bodyText)
         }
         let text = content.compactMap { block -> String? in
             (block["type"] as? String) == "text" ? block["text"] as? String : nil
         }.joined()
         let stop = obj["stop_reason"] as? String ?? "unknown"
-        return Reply(text: text, stopReason: stop)
+        return LLMReply(text: text, stopReason: stop)
     }
 
     func createMessageBatch(
@@ -131,26 +114,26 @@ struct AnthropicClient: Sendable {
 
     func downloadBatchResults(from resultURL: String) async throws -> String {
         guard let url = URL(string: resultURL) else {
-            throw APIError.malformed("bad result url")
+            throw LLMError.malformed("bad result url")
         }
-        var req = URLRequest(url: url, timeoutInterval: 90)
+        var req = URLRequest(url: url)
         req.httpMethod = "GET"
         req.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-        let (data, resp) = try await URLSession.shared.data(for: req)
+        let (data, resp) = try await LLMTransport.session.data(for: req)
         let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
         let bodyText = String(data: data, encoding: .utf8) ?? ""
         guard (200..<300).contains(code) else {
-            throw APIError.http(code, bodyText)
+            throw LLMError.http(code, bodyText)
         }
         return bodyText
     }
 
     private func doBatchRequest(method: String, path: String, body: [String: Any]?) async throws -> Batch {
         guard let url = URL(string: "\(baseURL)\(path)") else {
-            throw APIError.malformed("bad url")
+            throw LLMError.malformed("bad url")
         }
-        var req = URLRequest(url: url, timeoutInterval: 90)
+        var req = URLRequest(url: url)
         req.httpMethod = method
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue(apiKey, forHTTPHeaderField: "x-api-key")
@@ -159,15 +142,15 @@ struct AnthropicClient: Sendable {
             req.httpBody = try JSONSerialization.data(withJSONObject: body)
         }
 
-        let (data, resp) = try await URLSession.shared.data(for: req)
+        let (data, resp) = try await LLMTransport.session.data(for: req)
         let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
         let bodyText = String(data: data, encoding: .utf8) ?? ""
         guard (200..<300).contains(code) else {
-            throw APIError.http(code, bodyText)
+            throw LLMError.http(code, bodyText)
         }
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let id = obj["id"] as? String else {
-            throw APIError.malformed(bodyText)
+            throw LLMError.malformed(bodyText)
         }
         let status = obj["processing_status"] as? String
             ?? obj["status"] as? String
