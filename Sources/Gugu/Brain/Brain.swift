@@ -31,6 +31,11 @@ final class Brain {
         personaText = (try? String(contentsOf: Paths.persona, encoding: .utf8)) ?? personaText
     }
 
+    /// Persona plus the active-language directive, so the bird speaks the chosen language.
+    private var systemPrompt: String {
+        personaText + "\n\n" + L.llmLanguageDirective
+    }
+
     private var client: AnthropicClient {
         AnthropicClient(baseURL: config.apiURL, apiKey: config.apiKey)
     }
@@ -96,7 +101,7 @@ final class Brain {
         let reply = try await client.create(
             model: config.instinct.id,
             maxTokens: config.instinct.maxTokens,
-            system: personaText,
+            system: systemPrompt,
             messages: [["role": "user", "content": userMsg]],
             schema: Brain.heartbeatSchema
         )
@@ -166,14 +171,6 @@ final class Brain {
             if !result.allowed {
                 _ = ProposalEngine().writeToolPermissionProposal(title: "请求学会记提醒", key: "tools.reminders")
             }
-        case .research:
-            result = executor.execute(.init(name: "web_search.request", arguments: [
-                "query": command.content,
-                "reason": "主人主动让咕咕研究",
-            ]))
-            if !result.allowed {
-                _ = ProposalEngine().writeToolPermissionProposal(title: "请求学会查资料", key: "tools.web_search")
-            }
         }
 
         let reply: String
@@ -182,7 +179,7 @@ final class Brain {
         } else if result.allowed {
             reply = result.message
         } else {
-            reply = "这个我还不能做。我把申请放到提案里了。"
+            reply = L.cannotDoYet
         }
         appendChatLog(user: userText, pet: reply)
         return ChatResult(reply: reply, action: "nod")
@@ -194,13 +191,12 @@ final class Brain {
             switch command.kind {
             case .note: kind = .note
             case .reminder: kind = .reminder
-            case .research: kind = .research
             }
             let task = try AutonomyTaskQueue().enqueue(kind: kind, title: command.content, body: command.dueText ?? "")
-            return "放到夜里做了。\(task.title)"
+            return L.deferredTask(task.title)
         } catch {
             Log.info("autonomy", "入队失败: \(error)")
-            return "这个夜里任务没放进去。"
+            return L.autonomyEnqueueFailed
         }
     }
 
@@ -245,7 +241,7 @@ final class Brain {
         let reply = try await client.create(
             model: tier.id,
             maxTokens: max(tier.maxTokens, 300),
-            system: personaText,
+            system: systemPrompt,
             messages: messages,
             schema: Brain.chatSchema
         )
@@ -284,8 +280,106 @@ final class Brain {
         }
     }
 
-    // MARK: - L4 Dream (nightly distillation)
+    // MARK: - 动作学习(动作进化:把主人的口头要求翻译成元动作编排)
 
+    /// 单步编排的 schema:op 限定在白名单基元内,其余为可选参数。
+    static let moveStepSchema: [String: Any] = [
+        "type": "object",
+        "properties": [
+            "op": ["type": "string",
+                   "enum": MetaOp.allCases.map { $0.rawValue },
+                   "description": "身体基元。move=平移 rotate=旋转(弧度) scale=挤压拉伸 flap=扑翅 hop=蹦 wait=停顿 say=说一句 view=朝向 tilt=歪头 blush=脸红 peck=啄 groom=理毛"],
+            "dx": ["type": "number", "description": "move:水平位移(点,±120内)"],
+            "dy": ["type": "number", "description": "move:垂直位移(点,±120内)"],
+            "by": ["type": "number", "description": "rotate:旋转弧度(一圈=6.283)"],
+            "x": ["type": "number", "description": "scale:横向比例(0.3~2)"],
+            "y": ["type": "number", "description": "scale:纵向比例(0.3~2)"],
+            "dur": ["type": "number", "description": "本步时长(秒,≤2)"],
+            "times": ["type": "integer", "description": "flap:扇动次数(1~30)"],
+            "fast": ["type": "boolean", "description": "flap:是否快速"],
+            "height": ["type": "number", "description": "hop:跳起高度(点,≤80)"],
+            "text": ["type": "string", "description": "say:要说的短话(≤24字)"],
+            "dir": ["type": "string", "enum": ["front", "back", "side"], "description": "view:朝向"],
+            "on": ["type": "boolean", "description": "tilt/blush:开或关"],
+        ],
+        "required": ["op"],
+        "additionalProperties": false,
+    ]
+
+    static var moveSchema: [String: Any] {
+        [
+            "type": "object",
+            "properties": [
+                "name": ["type": "string", "description": "动作的简短名字(≤8字),如:翻跟头、作揖"],
+                "trigger": ["type": "string", "description": "主人说什么时触发这个动作,一个短词,如:翻跟头"],
+                "steps": [
+                    "type": "array",
+                    "description": "动作分解成的若干步(≤12步,总时长≤8秒)。只能用给定的身体基元拼。",
+                    "items": moveStepSchema,
+                ],
+                "feasible": ["type": "boolean", "description": "用现有身体基元能不能大致表现这个动作。完全做不到就填 false"],
+            ],
+            "required": ["name", "trigger", "steps", "feasible"],
+            "additionalProperties": false,
+        ]
+    }
+
+    struct LearnedMoveDraft {
+        let move: Move
+        let feasible: Bool
+    }
+
+    /// 让模型把主人口头描述的动作翻译成一段元动作编排(只能用白名单基元)。
+    /// 这一步是"它居然学会了"的灵光时刻——低频、择机、短输出(公理 A2)。
+    /// 返回的草稿仍需经 move_add 提案 + 主人批准才会真正注册(公理 B2)。
+    func learnMove(intent: String) async throws -> LearnedMoveDraft {
+        let system = L.learnMoveSystemPrompt
+        let user = L.learnMoveUserMessage(intent)
+        let reply = try await client.create(
+            model: config.instinct.id,
+            maxTokens: 600,
+            system: system + "\n\n" + L.llmLanguageDirective,
+            messages: [["role": "user", "content": user]],
+            schema: Brain.moveSchema
+        )
+        budget.record(inputChars: system.count + user.count,
+                      outputChars: reply.text.count, tier: config.instinct)
+        return try Brain.parseMoveDraft(reply.text, fallbackName: intent)
+    }
+
+    static func parseMoveDraft(_ text: String, fallbackName: String) throws -> LearnedMoveDraft {
+        guard let json = extractJSON(text), let data = json.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw AnthropicClient.APIError.malformed("move json: \(text)")
+        }
+        let name = (obj["name"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? fallbackName
+        let trigger = (obj["trigger"] as? String) ?? name
+        let feasible = (obj["feasible"] as? Bool) ?? true
+        let rawSteps = (obj["steps"] as? [[String: Any]]) ?? []
+        let steps: [MoveStep] = rawSteps.compactMap { dict in
+            guard let op = dict["op"] as? String else { return nil }
+            return MoveStep(
+                op: op,
+                dx: dict["dx"] as? Double,
+                dy: dict["dy"] as? Double,
+                by: dict["by"] as? Double,
+                x: dict["x"] as? Double,
+                y: dict["y"] as? Double,
+                dur: dict["dur"] as? Double,
+                times: dict["times"] as? Int,
+                fast: dict["fast"] as? Bool,
+                height: dict["height"] as? Double,
+                text: dict["text"] as? String,
+                dir: dict["dir"] as? String,
+                on: dict["on"] as? Bool
+            )
+        }
+        let move = Move(name: name, trigger: trigger, steps: steps, origin: "learned",
+                        createdAt: ISO8601DateFormatter().string(from: Date()))
+        return LearnedMoveDraft(move: move, feasible: feasible)
+    }
+
+    // MARK: - L4 Dream (nightly distillation)
     static let dreamSchema: [String: Any] = [
         "type": "object",
         "properties": [
@@ -333,11 +427,11 @@ final class Brain {
         let reply = try await client.create(
             model: config.dream.id,
             maxTokens: config.dream.maxTokens,
-            system: personaText,
+            system: systemPrompt,
             messages: [["role": "user", "content": user]],
             schema: Brain.dreamSchema
         )
-        budget.record(inputChars: personaText.count + user.count,
+        budget.record(inputChars: systemPrompt.count + user.count,
                       outputChars: reply.text.count, tier: config.dream)
 
         guard let data = Brain.extractJSON(reply.text)?.data(using: .utf8),
@@ -355,11 +449,11 @@ final class Brain {
             customID: customID,
             model: config.dream.id,
             maxTokens: config.dream.maxTokens,
-            system: personaText,
+            system: systemPrompt,
             messages: [["role": "user", "content": user]],
             schema: Brain.dreamSchema
         )
-        budget.record(inputChars: personaText.count + user.count, outputChars: 1, tier: config.dream)
+        budget.record(inputChars: systemPrompt.count + user.count, outputChars: 1, tier: config.dream)
         let state = DreamBatchState(
             batchID: batch.id,
             customID: customID,

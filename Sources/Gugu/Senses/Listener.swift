@@ -17,7 +17,7 @@ enum ListenerStatus: Equatable {
 @MainActor
 final class Listener: NSObject {
     private let engine = AVAudioEngine()
-    private let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "zh-CN"))
+    private let recognizer = SFSpeechRecognizer(locale: Locale(identifier: L.current == .zh ? "zh-CN" : "en-US"))
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
     private var running = false
@@ -37,7 +37,7 @@ final class Listener: NSObject {
     /// 刚听到唤醒词、开始留意时的轻回调(可用于让鸟抬头)。
     var onWake: (() -> Void)?
 
-    private static let wakeWords = ["咕咕", "股股", "古古", "咕咕鸟", "小咕"]
+    private static var wakeWords: [String] { L.wakeWords }
 
     var enabled: Bool {
         get { UserDefaults.standard.bool(forKey: "gugu.listen.enabled") }
@@ -145,13 +145,29 @@ final class Listener: NSObject {
         if isFinal {
             dispatch(command, consumedLength: full.count)
         } else {
-            scheduleDispatch(command, consumedLength: full.count)
+            // 句末已带终止标点 → 这一句多半说完了,几乎立刻派发;否则用较短的防抖等后续字。
+            let delay = Listener.endsSentence(full) ? 0.2 : 0.5
+            scheduleDispatch(command, consumedLength: full.count, after: delay)
         }
     }
 
+    /// partial 文本是否以句末标点收尾(说明这句大概率讲完了)。
+    private static func endsSentence(_ s: String) -> Bool {
+        guard let last = s.trimmingCharacters(in: .whitespacesAndNewlines).unicodeScalars.last else { return false }
+        return CharacterSet(charactersIn: "。!！?？;；").contains(last)
+    }
+
     private static func findWake(in s: String) -> Range<String.Index>? {
+        let haystack = s.lowercased()
         for w in wakeWords {
-            if let r = s.range(of: w) { return r }
+            if let r = haystack.range(of: w.lowercased()) {
+                // map the lowercased range back onto the original string by offset
+                let lower = haystack.distance(from: haystack.startIndex, to: r.lowerBound)
+                let upper = haystack.distance(from: haystack.startIndex, to: r.upperBound)
+                let start = s.index(s.startIndex, offsetBy: lower)
+                let end = s.index(s.startIndex, offsetBy: upper)
+                return start..<end
+            }
         }
         return nil
     }
@@ -173,7 +189,7 @@ final class Listener: NSObject {
     }
 
     private static func cleanCommand(_ raw: String) -> String {
-        let droppedPrefixes = ["咕咕", "股股", "古古", "咕咕鸟", "小咕"]
+        let droppedPrefixes = wakeWords
         var out = raw.trimmingCharacters(in: CharacterSet(charactersIn: " \n\t,，。!！?？、"))
         for prefix in droppedPrefixes where out.hasPrefix(prefix) {
             out.removeFirst(prefix.count)
@@ -189,7 +205,7 @@ final class Listener: NSObject {
         return out
     }
 
-    private func scheduleDispatch(_ command: String, consumedLength: Int) {
+    private func scheduleDispatch(_ command: String, consumedLength: Int, after delay: TimeInterval = 0.5) {
         pendingDispatch?.cancel()
         let item = DispatchWorkItem { [weak self] in
             Task { @MainActor in
@@ -198,7 +214,7 @@ final class Listener: NSObject {
             }
         }
         pendingDispatch = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9, execute: item)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
     }
 
     private func dispatch(_ command: String, consumedLength: Int) {

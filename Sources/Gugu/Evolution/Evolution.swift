@@ -87,7 +87,7 @@ final class Evolution {
             Log.info("evolution", "批准进化保存失败:\(error)")
             return false
         }
-        appendBond("主人批准咕咕长成了\(target.displayName)。")
+        appendBond(L.evolvedTo(target.displayName))
         return true
     }
 
@@ -170,27 +170,27 @@ final class Evolution {
         let df = DateFormatter()
         df.dateFormat = "yyyyMMdd-HHmmss"
         let id = "stage-\(old.rawValue)-to-\(new.rawValue)-\(df.string(from: Date()))"
-        let title = "请求长成\(new.displayName)"
+        let title = L.evolutionProposalTitle(new.displayName)
         let url = Paths.proposals.appendingPathComponent("\(id).md")
         let body = """
         # \(title)
         kind: stage
         target: state.json
 
-        状态:待主人批准
-        生成时间:\(ISO8601DateFormatter().string(from: Date()))
+        \(L.proposalStatusPending)
+        \(L.proposalGeneratedAt(ISO8601DateFormatter().string(from: Date())))
 
-        咕咕觉得自己从\(old.displayName)长到\(new.displayName)的条件已经接近成熟。
+        \(L.proposalGrowthReason(old.displayName, new.displayName))
 
-        当前指标:
-        - 相处天数:\(state.days_together)
-        - 见过事件:\(state.events_seen)
-        - 互动次数:\(state.interactions)
-        - 羁绊:\(String(format: "%.2f", state.bond))
-        - 信任:\(String(format: "%.2f", state.trust))
-        - 技能数:\(memory.skillCount())
+        \(L.proposalMetricsHeader)
+        \(L.proposalMetricDays(state.days_together))
+        \(L.proposalMetricEvents(state.events_seen))
+        \(L.proposalMetricInteractions(state.interactions))
+        \(L.proposalMetricBond(String(format: "%.2f", state.bond)))
+        \(L.proposalMetricTrust(String(format: "%.2f", state.trust)))
+        \(L.proposalMetricSkills(memory.skillCount()))
 
-        需要主人确认后才会生效。批准后只提升阶段;记忆、安全内核和现有边界保持不变。
+        \(L.proposalStageFooter)
         """
         try? body.write(to: url, atomically: true, encoding: .utf8)
         return Proposal(id: id, title: title, path: url)

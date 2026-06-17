@@ -6,7 +6,6 @@ final class AutonomyTaskQueue {
     enum TaskKind: String, Codable, CaseIterable {
         case note
         case reminder
-        case research
     }
 
     enum TaskStatus: String, Codable {
@@ -177,13 +176,11 @@ final class AutonomyTaskQueue {
             return task.body.isEmpty ? "离线记录:\(task.title)" : "离线记录:\(task.title)\n\(task.body)"
         case .reminder:
             return task.body.isEmpty ? "离线提醒:\(task.title)" : "离线提醒:\(task.title)\n\(task.body)"
-        case .research:
-            return task.body.isEmpty ? "已记录待研究请求:\(task.title)" : "已记录待研究请求:\(task.title)\n\(task.body)"
         }
     }
 
     /// Real runner: routes each task through the local tool layer so a deferred
-    /// note/reminder/research actually lands instead of returning a stub string.
+    /// note/reminder actually lands instead of returning a stub string.
     /// A denied tool (permission off) fails the task — the queue records the
     /// truth rather than marking unfinished work "completed".
     static func toolRunner(config: Config) -> Runner {
@@ -197,11 +194,6 @@ final class AutonomyTaskQueue {
                 var args = ["text": task.title]
                 if !task.body.isEmpty { args["due"] = task.body }
                 result = executor.execute(.init(name: "reminders.add", arguments: args))
-            case .research:
-                result = executor.execute(.init(name: "web_search.request", arguments: [
-                    "query": task.title,
-                    "reason": "夜间自主任务",
-                ]))
             }
             guard result.ok else {
                 throw QueueError.runnerFailed(result.message)

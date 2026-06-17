@@ -60,11 +60,6 @@ struct LocalToolExecutor {
                     text: required("text", in: call),
                     due: optional("due", in: call)
                 )
-            case "web_search.request":
-                return try requestWebSearch(
-                    query: required("query", in: call),
-                    reason: optional("reason", in: call)
-                )
             default:
                 let result = Result(
                     tool: call.name,
@@ -105,7 +100,7 @@ struct LocalToolExecutor {
     func addNote(text: String) throws -> Result {
         let tool = "notes.add"
         guard config.toolNotes else {
-            return denied(tool: tool, message: "notes.add 未授权:请先在配置中开启 tools.notes")
+            return denied(tool: tool, message: L.notesNotAuthorized)
         }
 
         let cleanText = normalized(text)
@@ -121,13 +116,13 @@ struct LocalToolExecutor {
             "text": cleanText,
         ]
         try appendJSONLine(record, to: url, tool: tool)
-        return allowed(tool: tool, message: "已记录笔记", id: id, file: url)
+        return allowed(tool: tool, message: L.noteRecorded, id: id, file: url)
     }
 
     func addReminder(text: String, due: String? = nil) throws -> Result {
         let tool = "reminders.add"
         guard config.toolReminders else {
-            return denied(tool: tool, message: "reminders.add 未授权:请先在配置中开启 tools.reminders")
+            return denied(tool: tool, message: L.remindersNotAuthorized)
         }
 
         let cleanText = normalized(text)
@@ -146,46 +141,21 @@ struct LocalToolExecutor {
         if !cleanDue.isEmpty { record["due"] = cleanDue }
         try appendJSONLine(record, to: url, tool: tool)
 
-        var scheduledMessage = cleanDue.isEmpty ? "已记录提醒事项" : "已记录提醒事项(\(cleanDue))"
+        var scheduledMessage = cleanDue.isEmpty ? L.reminderRecorded : L.reminderRecordedWithDue(cleanDue)
         if config.toolLocalNotifications {
             if cleanDue.isEmpty {
-                LocalNotifier.notify(title: "咕咕提醒事项", body: cleanText)
+                LocalNotifier.notify(title: L.reminderNotificationTitle, body: cleanText)
             } else if let fireDate = DueDateParser.parse(cleanDue) {
-                LocalNotifier.schedule(title: "咕咕提醒事项", body: cleanText, at: fireDate)
+                LocalNotifier.schedule(title: L.reminderNotificationTitle, body: cleanText, at: fireDate)
                 let fmt = DateFormatter()
-                fmt.dateFormat = "M月d日 HH:mm"
-                scheduledMessage = "已记录提醒事项,会在 \(fmt.string(from: fireDate)) 提醒你"
+                fmt.dateFormat = L.current == .zh ? "M月d日 HH:mm" : "MMM d, HH:mm"
+                scheduledMessage = L.reminderScheduled(fmt.string(from: fireDate))
             } else {
                 // due present but unparseable — don't silently drop it
-                LocalNotifier.notify(title: "咕咕提醒事项", body: cleanText)
+                LocalNotifier.notify(title: L.reminderNotificationTitle, body: cleanText)
             }
         }
         return allowed(tool: tool, message: scheduledMessage, id: id, file: url)
-    }
-
-    func requestWebSearch(query: String, reason: String? = nil) throws -> Result {
-        let tool = "web_search.request"
-        guard config.toolWebSearch else {
-            return denied(tool: tool, message: "web_search.request 未授权:请先在配置中开启 tools.web_search")
-        }
-
-        let cleanQuery = normalized(query)
-        guard !cleanQuery.isEmpty else {
-            throw ToolError.invalidArgument(tool: tool, argument: "query")
-        }
-
-        let cleanReason = normalized(reason ?? "")
-        let id = makeID(prefix: "research")
-        let url = Paths.root.appendingPathComponent("research_requests.jsonl")
-        var record: [String: Any] = [
-            "id": id,
-            "t": iso.string(from: Date()),
-            "query": cleanQuery,
-            "status": "pending",
-        ]
-        if !cleanReason.isEmpty { record["reason"] = cleanReason }
-        try appendJSONLine(record, to: url, tool: tool)
-        return allowed(tool: tool, message: "已记录待研究请求", id: id, file: url)
     }
 
     private func required(_ key: String, in call: ToolCall) throws -> String {

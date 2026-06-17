@@ -199,6 +199,7 @@ final class Scheduler {
         lastConfigMTime = currentMTime
         config = Config.load()
         brain.config = config
+        L.current = config.language == "zh" ? .zh : .en
         budget.dailyTokens = GrowthStage.adjustedDailyTokens(
             base: config.dailyTokens,
             stage: GrowthStage(rawStage: PetState.load().stage)
@@ -210,7 +211,7 @@ final class Scheduler {
 
     private func morningWords(from result: Brain.DreamResult) -> String {
         guard let title = result.proposalTitle else { return result.morningWords }
-        let prompt = "我梦见自己好像能长大了。\(title),等你批准。"
+        let prompt = L.dreamProposal(title)
         guard !result.morningWords.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return prompt
         }

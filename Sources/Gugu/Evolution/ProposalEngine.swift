@@ -64,6 +64,8 @@ final class ProposalEngine {
             return try applyConfigSet(proposal, url: url)
         case "tool_permission":
             return try applyToolPermission(proposal, url: url)
+        case "move_add":
+            return try applyMoveAdd(proposal, url: url)
         default:
             throw ProposalError.unsupportedKind(kind)
         }
@@ -100,8 +102,32 @@ final class ProposalEngine {
         return url
     }
 
-    func writeToolPermissionProposal(title: String, key: String, value: Bool = true) -> URL {
-        let url = proposalURL(prefix: "tool")
+    /// 生成一个"学会新动作"的提案。move 的编排以 JSON 形式放在正文(--- 之后),
+    /// 主人批准后写入 moves/。提案前先做一次校验,非法编排根本不生成提案。
+    func writeMoveProposal(_ move: Move) throws -> URL {
+        let validatedSteps = try MetaActionValidator.validate(steps: move.steps)
+        let name = try MetaActionValidator.sanitizedName(move.name)
+        let finalized = Move(name: name, trigger: move.trigger, steps: validatedSteps,
+                             origin: "learned", createdAt: move.createdAt)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .withoutEscapingSlashes]
+        let json = String(data: try encoder.encode(finalized), encoding: .utf8) ?? "{}"
+        let url = proposalURL(prefix: "move")
+        let text = """
+        # 想学会新动作:\(name)
+        kind: move_add
+        target: moves/\(name).json
+
+        ---
+        \(json)
+        """
+        try? text.write(to: url, atomically: true, encoding: .utf8)
+        Audit.record(kind: "proposal.create", summary: "生成学习动作提案:\(name)",
+                     detail: ["proposal": url.lastPathComponent, "move": name])
+        return url
+    }
+
+    func writeToolPermissionProposal(title: String, key: String, value: Bool = true) -> URL {        let url = proposalURL(prefix: "tool")
         let text = """
         # \(title)
         kind: tool_permission
@@ -169,8 +195,32 @@ final class ProposalEngine {
         return Applied(title: proposal.title, target: Paths.config, snapshot: snapshot, newStage: nil)
     }
 
-    private let allowedConfigKeys: Set<String> = [
-        "budget.daily_tokens",
+    /// 批准学习动作:解析正文 JSON → 再次校验/夹紧 → 落盘到 moves/。
+    /// 这一步是动作进化真正"长出来"的瞬间,且仍然只能产出受白名单约束的编排。
+    @MainActor
+    private func applyMoveAdd(_ proposal: ParsedProposal, url: URL) throws -> Applied {
+        let body = proposal.body.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !body.isEmpty, let data = body.data(using: .utf8) else {
+            throw ProposalError.missingField("move json")
+        }
+        guard let move = try? JSONDecoder().decode(Move.self, from: data) else {
+            throw ProposalError.invalidTarget("move json 解析失败")
+        }
+        // MoveLibrary.save 内部会再次校验 + 夹紧 + 消毒名字(纵深防御)。
+        let saved: Move
+        do {
+            saved = try MoveLibrary.shared.save(move)
+        } catch {
+            throw ProposalError.invalidTarget("动作校验失败: \(error)")
+        }
+        let target = Paths.movesDir.appendingPathComponent("\(saved.name).json")
+        archiveAppliedProposal(url)
+        Audit.record(kind: "proposal.apply", summary: "学会新动作:\(saved.name)",
+                     detail: ["proposal": url.lastPathComponent, "move": saved.name, "steps": "\(saved.steps.count)"])
+        return Applied(title: "学会了「\(saved.name)」", target: target, snapshot: target, newStage: nil)
+    }
+
+    private let allowedConfigKeys: Set<String> = [        "budget.daily_tokens",
         "heartbeat.min_interval",
         "heartbeat.max_interval",
         "heartbeat.freeze_when_focused",
@@ -180,7 +230,6 @@ final class ProposalEngine {
     ]
 
     private let allowedToolKeys: Set<String> = [
-        "tools.web_search",
         "tools.notes",
         "tools.reminders",
         "tools.local_notifications",
@@ -297,7 +346,7 @@ private struct ParsedProposal {
     let body: String
 
     init(text: String) {
-        var title = "未命名提案"
+        var title = L.proposalUnnamed
         var meta: [String: String] = [:]
         var bodyLines: [String] = []
         var inBody = false

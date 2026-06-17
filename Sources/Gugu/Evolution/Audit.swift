@@ -29,32 +29,32 @@ enum Audit {
         let todayAudit = readLines(Paths.auditFile()).suffix(maxEvents)
         let state = PetState.load()
         let proposals = Evolution(memory: Memory()).pendingProposals()
-        let usage = (try? String(contentsOf: Paths.usage, encoding: .utf8)) ?? "(暂无)"
+        let usage = (try? String(contentsOf: Paths.usage, encoding: .utf8)) ?? L.auditEmpty
 
         let body = """
-        # 咕咕今天看到了什么
+        \(L.auditTitle)
 
-        生成时间:\(ISO8601DateFormatter().string(from: Date()))
+        \(L.auditGeneratedAt(ISO8601DateFormatter().string(from: Date())))
 
-        ## 当前状态
-        - 形态:\(state.stage)
-        - 待进化:\(state.pending_stage ?? "无")
-        - 相处天数:\(state.days_together)
-        - 事件数:\(state.events_seen)
-        - 互动数:\(state.interactions)
-        - 羁绊:\(String(format: "%.2f", state.bond))
-        - 信任:\(String(format: "%.2f", state.trust))
+        \(L.auditCurrentState)
+        \(L.auditStage(state.stage))
+        \(L.auditPendingStage(state.pending_stage ?? L.auditNone))
+        \(L.auditDays(state.days_together))
+        \(L.auditEventCount(state.events_seen))
+        \(L.auditInteractions(state.interactions))
+        \(L.auditBond(String(format: "%.2f", state.bond)))
+        \(L.auditTrust(String(format: "%.2f", state.trust)))
 
-        ## 待批准提案
-        \(proposals.isEmpty ? "无" : proposals.map { "- \($0.title) (\($0.id))" }.joined(separator: "\n"))
+        \(L.auditProposals)
+        \(proposals.isEmpty ? L.auditNone : proposals.map { "- \($0.title) (\($0.id))" }.joined(separator: "\n"))
 
-        ## 今日感知事件
-        \(todayEvents.isEmpty ? "暂无" : todayEvents.joined(separator: "\n"))
+        \(L.auditEvents)
+        \(todayEvents.isEmpty ? L.auditPending : todayEvents.joined(separator: "\n"))
 
-        ## 今日审计
-        \(todayAudit.isEmpty ? "暂无" : todayAudit.joined(separator: "\n"))
+        \(L.auditSection)
+        \(todayAudit.isEmpty ? L.auditPending : todayAudit.joined(separator: "\n"))
 
-        ## 用量
+        \(L.auditUsage)
         \(usage)
         """
 

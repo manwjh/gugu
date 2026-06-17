@@ -19,10 +19,12 @@ enum Paths {
     static let state      = root.appendingPathComponent("state.json")
     static let usage      = root.appendingPathComponent("usage.json")
     static let schedulerState = root.appendingPathComponent("scheduler.json")
+    static let progressState = root.appendingPathComponent("progress.json")
     static let dreamBatchState = root.appendingPathComponent("dream_batch.json")
     static let pinnedMemory = root.appendingPathComponent("pinned.json")
     static let memoryDir  = root.appendingPathComponent("memory", isDirectory: true)
     static let skillsDir  = root.appendingPathComponent("skills", isDirectory: true)
+    static let movesDir   = root.appendingPathComponent("moves", isDirectory: true)
     static let eventsDir  = root.appendingPathComponent("events", isDirectory: true)
     static let modelsDir  = root.appendingPathComponent("models", isDirectory: true)
     static let auditDir   = root.appendingPathComponent("audit", isDirectory: true)
@@ -33,7 +35,7 @@ enum Paths {
 
     static func bootstrap() throws {
         let fm = FileManager.default
-        for dir in [root, memoryDir, skillsDir, eventsDir, modelsDir, auditDir, proposals, snapshots] {
+        for dir in [root, memoryDir, skillsDir, movesDir, eventsDir, modelsDir, auditDir, proposals, snapshots] {
             try fm.createDirectory(at: dir, withIntermediateDirectories: true)
         }
         if !fm.fileExists(atPath: pinnedMemory.deletingLastPathComponent().path) {

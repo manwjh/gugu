@@ -5,3 +5,4 @@ Gugu.app/
 dist/
 DerivedData/
 *.log
+.claude/

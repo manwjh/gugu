@@ -99,6 +99,10 @@ func runOfflineSelfTest() {
 
         print("=== 咕咕 offline selftest ===")
 
+        // This suite asserts Chinese display strings; pin language so localized
+        // names (formerly hard-coded) resolve to zh regardless of host defaults.
+        L.current = .zh
+
         do {
             try Paths.bootstrap()
             try Config.writeDefaultsIfMissing(apiURL: "https://example.invalid", apiKey: "")
@@ -282,11 +286,8 @@ func runOfflineSelfTest() {
                 && wed! == (17, 9, 0)          // 本周三(6/17) 09:00
             check("due_date.parse", ok, "明天=\(tomorrow!) 今晚=\(tonight!) 周三=\(wed!)")
         }
-        check("local_command.research",
-              LocalCommandParser.parse("咕咕,帮我研究 SwiftData 离线存储")?.kind == .research,
-              "research parser")
         check("local_command.deferred",
-              LocalCommandParser.parse("咕咕,今晚帮我研究 SwiftData 离线存储")?.deferred == true,
+              LocalCommandParser.parse("咕咕,今晚提醒我看审计报告")?.deferred == true,
               "deferred parser")
         let cleanedSpeech = PetController.desktopSpeech(from: "（低头理羽毛）这根快掉了。就这样。第三句不用显示。")
         check("desktop_speech.clean", !cleanedSpeech.contains("低头") && cleanedSpeech.contains("这根快掉了"),
@@ -341,7 +342,7 @@ func runOfflineSelfTest() {
               "delta=\(budget.usage.total - before) total=\(budget.usage.total)")
 
         let localBrain = Brain(config: config, budget: budget)
-        let deferredReply = localBrain.handleLocalCommand("咕咕,今晚帮我研究离线任务队列")
+        let deferredReply = localBrain.handleLocalCommand("咕咕,今晚提醒我看离线任务队列")
         check("brain.local_deferred", deferredReply?.reply.contains("夜里") == true,
               deferredReply?.reply ?? "(nil)")
         do {
@@ -551,19 +552,19 @@ func runOfflineSelfTest() {
             check("proposal.config_guard", true, "\(error)")
         }
 
-        let toolURL = Paths.proposals.appendingPathComponent("tool-web-search.md")
+        let toolURL = Paths.proposals.appendingPathComponent("tool-reminders.md")
         try? """
-        # 请求学会查资料
+        # 请求学会记提醒
         kind: tool_permission
         target: config.yaml
-        key: tools.web_search
+        key: tools.reminders
         value: true
         """.write(to: toolURL, atomically: true, encoding: .utf8)
         do {
             _ = try engine.applyApprovedProposal(at: toolURL)
             let cfg = Config.load()
-            check("proposal.tool", cfg.toolWebSearch,
-                  "web_search=\(cfg.toolWebSearch)")
+            check("proposal.tool", cfg.toolReminders,
+                  "reminders=\(cfg.toolReminders)")
         } catch {
             check("proposal.tool", false, "\(error)")
         }
@@ -592,7 +593,7 @@ func runOfflineSelfTest() {
 
         do {
             let queue = AutonomyTaskQueue()
-            let task = try queue.enqueue(kind: .research, title: "离线研究任务", body: "确认队列能完成")
+            let task = try queue.enqueue(kind: .note, title: "离线队列任务", body: "确认队列能完成")
             let pendingTasks = try queue.listPending()
             let run = try await queue.runDue(limit: 3)
             check("autonomy.queue", pendingTasks.contains { $0.id == task.id } && run.contains { $0.task.id == task.id && $0.succeeded },
@@ -625,11 +626,268 @@ func runOfflineSelfTest() {
         do {
             _ = try SnapshotStore.restoreLatest(for: "config.yaml")
             let restored = Config.load()
-            check("snapshot.restore", restored.dailyTokens == 12345 && restored.toolWebSearch && !restored.toolNotes && restored.toolLocalNotifications,
-                  "daily_tokens=\(restored.dailyTokens) web_search=\(restored.toolWebSearch) notes=\(restored.toolNotes) notifications=\(restored.toolLocalNotifications)")
+            check("snapshot.restore", restored.dailyTokens == 12345 && restored.toolReminders && !restored.toolNotes,
+                  "daily_tokens=\(restored.dailyTokens) reminders=\(restored.toolReminders) notes=\(restored.toolNotes) notifications=\(restored.toolLocalNotifications)")
         } catch {
             check("snapshot.restore", false, "\(error)")
         }
+
+        // MARK: - 动作进化(meta-action / moves)
+
+        // 元动作校验:合法编排通过并被夹紧;越界数值被 clamp 而非报错
+        do {
+            let raw = [
+                MoveStep(op: "flap", times: 999, fast: true),       // times 越界 → clamp 到 30
+                MoveStep(op: "move", dx: 9999, dy: -9999, dur: 99), // 位移/时长越界 → clamp
+                MoveStep(op: "rotate", by: 6.283, dur: 0.5),
+            ]
+            let clamped = try MetaActionValidator.validate(steps: raw)
+            let ok = clamped.count == 3
+                && clamped[0].times == MoveLimits.maxFlap
+                && clamped[1].dx == MoveLimits.maxTranslate
+                && clamped[1].dy == -MoveLimits.maxTranslate
+                && clamped[1].dur == MoveLimits.maxStepDuration
+            check("move.validate_clamp", ok,
+                  "times=\(clamped[0].times ?? -1) dx=\(clamped[1].dx ?? -1) dur=\(clamped[1].dur ?? -1)")
+        } catch {
+            check("move.validate_clamp", false, "\(error)")
+        }
+
+        // 结构性错误被挡:未知基元 / 空编排 / 步数超限
+        do {
+            var threwUnknown = false, threwEmpty = false, threwTooMany = false
+            do { _ = try MetaActionValidator.validate(steps: [MoveStep(op: "explode")]) }
+            catch { threwUnknown = true }
+            do { _ = try MetaActionValidator.validate(steps: []) }
+            catch { threwEmpty = true }
+            do {
+                let many = (0..<20).map { _ in MoveStep(op: "peck") }
+                _ = try MetaActionValidator.validate(steps: many)
+            } catch { threwTooMany = true }
+            check("move.validate_reject", threwUnknown && threwEmpty && threwTooMany,
+                  "unknown=\(threwUnknown) empty=\(threwEmpty) tooMany=\(threwTooMany)")
+        }
+
+        // 危险台词/朝向被挡;名字消毒
+        do {
+            var threwSay = false, threwDir = false, threwName = false
+            do { _ = try MetaActionValidator.validate(steps: [MoveStep(op: "say", text: String(repeating: "啦", count: 50))]) }
+            catch { threwSay = true }
+            do { _ = try MetaActionValidator.validate(steps: [MoveStep(op: "view", dir: "sideways")]) }
+            catch { threwDir = true }
+            do { _ = try MetaActionValidator.sanitizedName("../../etc/passwd") }
+            catch { threwName = true }
+            let cleanName = (try? MetaActionValidator.sanitizedName("  翻跟头  ")) ?? ""
+            check("move.guard", threwSay && threwDir && threwName && cleanName == "翻跟头",
+                  "say=\(threwSay) dir=\(threwDir) name=\(threwName) clean=\(cleanName)")
+        }
+
+        // MoveLibrary:出厂内置动作被播种,可加载、可按名/触发词查
+        do {
+            let lib = MoveLibrary.shared
+            lib.reload()
+            let backflip = lib.move(named: "翻跟头")
+            let byTrigger = lib.matchTrigger(in: "咕咕你给我翻跟头看看")
+            check("move.library_builtins",
+                  backflip != nil && backflip?.origin == "builtin"
+                    && lib.moves.count >= 3
+                    && byTrigger?.name == "翻跟头",
+                  "builtins=\(lib.moves.count) backflip=\(backflip?.steps.count ?? -1)步 trigger=\(byTrigger?.name ?? "nil")")
+        }
+
+        // 解释器:能把编排编译成一个非空 SKAction(headless 也能跑)
+        do {
+            let bird = BirdNode()
+            let steps = MoveLibrary.builtins[0].steps   // 翻跟头(含一个 say)
+            let action = MoveInterpreter.compile(steps, on: bird) { _ in }
+            // SKAction.sequence 的 duration 应为正,说明编排成功翻成了动画
+            check("move.interpreter", action.duration > 0,
+                  "compiled duration=\(String(format: "%.2f", action.duration))s steps=\(steps.count)")
+        }
+
+        // move_add 提案门控:写提案 → 批准 → 真正落盘到 moves/ 且可被库加载
+        do {
+            let draft = Move(name: "测试鞠躬", trigger: "鞠躬测试", steps: [
+                MoveStep(op: "move", dy: -8, dur: 0.2),
+                MoveStep(op: "scale", y: 0.85, dur: 0.2),
+                MoveStep(op: "scale", y: 1.0, dur: 0.2),
+                MoveStep(op: "say", text: "咕。"),
+            ], origin: "learned")
+            let url = try ProposalEngine().writeMoveProposal(draft)
+            let applied = try ProposalEngine().applyApprovedProposal(at: url)
+            MoveLibrary.shared.reload()
+            let landed = MoveLibrary.shared.move(named: "测试鞠躬")
+            check("move.proposal_apply",
+                  applied.title.contains("测试鞠躬")
+                    && landed != nil
+                    && landed?.origin == "learned"
+                    && landed?.steps.count == 4
+                    && FileManager.default.fileExists(atPath: Paths.movesDir.appendingPathComponent("测试鞠躬.json").path),
+                  "applied=\(applied.title) landed=\(landed?.name ?? "nil")")
+        } catch {
+            check("move.proposal_apply", false, "\(error)")
+        }
+
+        // 恶意 move_add 提案被挡:正文里塞越界/未知基元,批准时校验失败
+        do {
+            let badURL = Paths.proposals.appendingPathComponent("move-bad.md")
+            try? """
+            # 想学会新动作:坏动作
+            kind: move_add
+            target: moves/坏动作.json
+
+            ---
+            {"name":"坏动作","trigger":"坏","steps":[{"op":"explode"}],"origin":"learned"}
+            """.write(to: badURL, atomically: true, encoding: .utf8)
+            var rejected = false
+            do { _ = try ProposalEngine().applyApprovedProposal(at: badURL) }
+            catch { rejected = true }
+            let notLanded = MoveLibrary.shared.move(named: "坏动作") == nil
+            check("move.proposal_guard", rejected && notLanded,
+                  "rejected=\(rejected) notLanded=\(notLanded)")
+        } catch {
+            check("move.proposal_guard", false, "\(error)")
+        }
+
+        // 学习意图解析:口语请求 → 动作意图;非请求不误判
+        do {
+            let a = LearnMoveParser.parse("咕咕,学个翻跟头")
+            let b = LearnMoveParser.parse("教你转个圈好不好")
+            let c = LearnMoveParser.parse("你能学会作揖吗")
+            let d = LearnMoveParser.parse("今天天气不错")   // 不是学动作请求
+            check("learn_move.parse",
+                  a == "翻跟头" && b == "转个圈" && c == "作揖" && d == nil,
+                  "a=\(a ?? "nil") b=\(b ?? "nil") c=\(c ?? "nil") d=\(d.map { $0 } ?? "nil")")
+        }
+
+        // learnMove 草稿解析:模型 JSON → Move(含 feasible 标志与步骤)
+        do {
+            let json = """
+            {"name":"作揖","trigger":"作揖","feasible":true,"steps":[
+              {"op":"view","dir":"front"},
+              {"op":"move","dy":-6,"dur":0.2},
+              {"op":"move","dy":6,"dur":0.2},
+              {"op":"say","text":"咕咕"}
+            ]}
+            """
+            let draft = try Brain.parseMoveDraft(json, fallbackName: "作揖")
+            let validated = try MetaActionValidator.validate(steps: draft.move.steps)
+            check("learn_move.draft_parse",
+                  draft.feasible && draft.move.name == "作揖"
+                    && draft.move.steps.count == 4 && validated.count == 4,
+                  "name=\(draft.move.name) feasible=\(draft.feasible) steps=\(draft.move.steps.count)")
+        } catch {
+            check("learn_move.draft_parse", false, "\(error)")
+        }
+
+        // MARK: - 可发现性 / 成长回路 / 行为多样性 / 触感
+
+        // ProgressState 读写往返
+        do {
+            var p = ProgressState()
+            p.pokeCount = 3
+            p.markHintShown("poke")
+            p.markMilestoneReached("bond_30")
+            p.save()
+            let loaded = ProgressState.load()
+            check("progress.persist",
+                  loaded.pokeCount == 3
+                    && loaded.hasShownHint("poke")
+                    && loaded.hasReachedMilestone("bond_30")
+                    && !loaded.hasShownHint("pet"),
+                  "poke=\(loaded.pokeCount) hints=\(loaded.hintsShown) ms=\(loaded.milestonesReached)")
+        }
+
+        // Discovery:按优先级择机,且已展示的不再出
+        do {
+            var fresh = ProgressState()
+            let first = Discovery.nextHint(fresh)         // 应先教"戳"
+            fresh.markHintShown("poke")
+            fresh.pokeCount = 1
+            let second = Discovery.nextHint(fresh)        // 戳过了 → 教"摸"
+            fresh.markHintShown("pet"); fresh.petCount = 1
+            fresh.markHintShown("learn"); fresh.markHintShown("chat")
+            let none = Discovery.nextHint(fresh)          // 全展示过 → nil
+            check("discovery.next_hint",
+                  first?.id == "poke" && second?.id == "pet" && none == nil,
+                  "first=\(first?.id ?? "nil") second=\(second?.id ?? "nil") none=\(none?.id ?? "nil")")
+        }
+
+        // Discovery:无关时不乱提(还没戳过却已经会动作,也不该先冒 learn)
+        do {
+            var p = ProgressState()
+            p.pokeCount = 0
+            let hint = Discovery.nextHint(p)
+            check("discovery.relevance", hint?.id == "poke",
+                  "hint=\(hint?.id ?? "nil")")
+        }
+
+        // Milestones:跨越检测 + 高水位只触发一次
+        do {
+            var p = ProgressState()
+            p.pokeCount = 6; p.petCount = 4   // interactions=10
+            var s = PetState.load()
+            s.bond = 0.1; s.days_together = 0
+            let first = Milestones.newlyReached(progress: p, state: s)
+            let hasInteract10 = first.contains { $0.id == "interact_10" }
+            // 标记已达成后,再算应为空
+            var p2 = p
+            for m in first { p2.markMilestoneReached(m.id) }
+            let again = Milestones.newlyReached(progress: p2, state: s)
+            check("milestones.cross_once",
+                  hasInteract10 && again.allSatisfy { $0.id != "interact_10" },
+                  "first=\(first.map { $0.id }) again=\(again.map { $0.id })")
+        }
+
+        // Milestones:羁绊与天数阈值
+        do {
+            let p = ProgressState()
+            var s = PetState.load()
+            s.bond = 0.55; s.days_together = 7
+            let reached = Milestones.newlyReached(progress: p, state: s)
+            let ids = Set(reached.map { $0.id })
+            check("milestones.bond_days",
+                  ids.contains("bond_30") && ids.contains("bond_50") && ids.contains("days_3") && ids.contains("days_7"),
+                  "ids=\(ids.sorted())")
+        }
+
+        // IdleSelector:精力低偏静、精力高心情好可能玩动作、纯函数确定性
+        do {
+            let lowEnergy = IdleSelector.choose(roll: 0.05, energy: 0.2, valence: 0.0, availableMove: "翻跟头")
+            let lowIsCalm: Bool = {
+                switch lowEnergy { case .standStill, .groom, .tiltHead, .peck, .stretch: return true; default: return false }
+            }()
+            let play = IdleSelector.choose(roll: 0.05, energy: 0.8, valence: 0.5, availableMove: "翻跟头")
+            let isPlay = play == .playMove("翻跟头")
+            let noMove = IdleSelector.choose(roll: 0.05, energy: 0.8, valence: 0.5, availableMove: nil)
+            let notPlayWhenNone = noMove != .playMove("翻跟头")
+            check("idle.selector",
+                  lowIsCalm && isPlay && notPlayWhenNone,
+                  "low=\(lowEnergy) play=\(play) noMove=\(noMove)")
+        }
+
+        // PokeCombo:时间窗内累计、超窗清零、反应分级
+        do {
+            var combo = PokeCombo(window: 1.6)
+            let base = Date(timeIntervalSince1970: 1_800_000_000)
+            let c1 = combo.registerPoke(now: base)
+            let c2 = combo.registerPoke(now: base.addingTimeInterval(0.5))
+            let c3 = combo.registerPoke(now: base.addingTimeInterval(1.0))
+            // 隔很久再戳 → 连击清零
+            let cReset = combo.registerPoke(now: base.addingTimeInterval(10))
+            let tiers = (
+                PokeCombo.reaction(for: 1),
+                PokeCombo.reaction(for: 3),
+                PokeCombo.reaction(for: 6),
+                PokeCombo.reaction(for: 9)
+            )
+            check("poke.combo",
+                  c1 == 1 && c2 == 2 && c3 == 3 && cReset == 1
+                    && tiers.0 == .mild && tiers.1 == .annoyed
+                    && tiers.2 == .dizzy && tiers.3 == .flee,
+                  "counts=\(c1),\(c2),\(c3),reset=\(cReset)")
+        }
+
 
         print(failures == 0 ? "=== 全部通过 ===" : "=== \(failures) 项失败 ===")
         exit(failures == 0 ? 0 : 1)

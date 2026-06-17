@@ -103,6 +103,7 @@ final class PetController: NSObject {
     private var stateUntil: Date = .distantPast
     private var fallFromDrag = false          // distinguishes owner-throw from perch-fall
     private var lastPerchAttempt = Date.distantPast
+    private var pokeCombo = PokeCombo()       // 连击戳计数(递进反应)
 
     var onPoke: (() -> Void)?
     var onPet: (() -> Void)?
@@ -110,6 +111,11 @@ final class PetController: NSObject {
     var onStateChange: ((PetBodyState) -> Void)?
     var menuProvider: (() -> NSMenu)?
     var speechAvoidanceFrame: CGRect?
+
+    /// idle 自娱自乐时读取当下心情(由 app 注入 Affect;未注入则用中性值)。
+    var idleMoodProvider: (() -> (energy: Double, valence: Double))?
+    /// idle 时偶尔"自己玩"的一个动作名(由 app 注入,通常随机挑一个已学会/内置动作)。
+    var idlePlayMoveProvider: (() -> String?)?
 
     private let winSize = CGSize(width: 150, height: 150)
     /// Bird's feet y-offset inside the scene.
@@ -287,36 +293,55 @@ final class PetController: NSObject {
             return
         }
         guard state == .idle else { return }
-        let roll = Double.random(in: 0...1)
-        switch roll {
-        case ..<0.35:
+        let mood = idleMoodProvider?() ?? (energy: 0.7, valence: 0.15)
+        let move = idlePlayMoveProvider?()
+        let behavior = IdleSelector.choose(roll: Double.random(in: 0...1),
+                                           energy: mood.energy, valence: mood.valence,
+                                           availableMove: move)
+        switch behavior {
+        case .wander:
             guard !detachFromSupportBeforeGroundRelocation(action: "walk") else { return }
-            // small wander
             let scr = screen.visibleFrame
             let dx = CGFloat.random(in: -180...180)
             let target = max(scr.minX, min(window.frame.origin.x + dx, scr.maxX - winSize.width))
             walkTargetX = target
             transition(to: .walk)
-        case ..<0.5:
+        case .groom:
             bird.setViewDirection(.side)
             bird.groomOnce()
-        case ..<0.62:
+        case .peck:
             bird.setViewDirection(.front)
             bird.peckOnce()
-        case ..<0.68:
+        case .tiltHead:
             bird.setViewDirection(.front)
             bird.tiltHead(true)
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in self?.bird.tiltHead(false) }
-        case ..<0.72:
-            // glance toward cursor
+        case .glanceCursor:
             let mouse = NSEvent.mouseLocation
             setFacing(right: mouse.x > window.frame.midX)
             bird.tiltHead(true)
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.bird.tiltHead(false) }
-        case ..<0.8:
+        case .flap:
             bird.setViewDirection(.front)
             bird.flapWings(times: 2)
-        default:
+        case .stretch:
+            bird.stretchOnce()
+            stateUntil = Date().addingTimeInterval(1.2)
+        case .lookAround:
+            bird.setViewDirection(.front)
+            setFacing(right: true)
+            bird.tiltHead(true)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
+                guard let self else { return }
+                self.setFacing(right: false)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.bird.tiltHead(false) }
+            stateUntil = Date().addingTimeInterval(1.6)
+        case .hop:
+            perform(action: "hop")
+        case .playMove(let name):
+            perform(action: name)
+        case .standStill:
             break // just stand there, being a bird
         }
     }
@@ -344,16 +369,28 @@ final class PetController: NSObject {
     // MARK: - High-level actions (from heartbeat decisions)
 
     func perform(action: String) {
-        guard state != .dragged else { return }
+        guard state != .dragged else {
+            Log.info("action", "被拖拽中，忽略 \(action)")
+            return
+        }
+        // 学会的动作优先:若 action 命中 moves/ 里的某个动作名,演它(数据化编排)。
+        if let move = MoveLibrary.shared.move(named: action) {
+            performLearnedMove(move)
+            return
+        }
         if state == .sleep && action != "sleep" { wake() }
         if state == .flyingToPerch, action != "idle" {
             if supportSurface?.isChatInput == true {
                 if canPerformAfterChatInputPerch(action) {
                     queueActionAfterChatInputPerch(action)
                 }
+                Log.info("action", "正在飞向聊天框，忽略 \(action)")
                 return
             }
-            if relocatesBody(action) { return }
+            if relocatesBody(action) {
+                Log.info("action", "正在飞行中，忽略位移动作 \(action)")
+                return
+            }
         }
         if detachFromSupportBeforeGroundRelocation(action: action) {
             return
@@ -423,6 +460,32 @@ final class PetController: NSObject {
         }
     }
 
+    /// 演一个"学会的动作":把元动作编排翻成 SKAction 跑在身体上(本地零成本)。
+    /// 动作期间临时锁住 idle 微行为,演完恢复站姿与呼吸。
+    func performLearnedMove(_ move: Move) {
+        guard state == .idle || state == .perch else {
+            // 正在走/飞/睡等,先回到 idle 再演,避免动作打架。
+            if state == .sleep { wake() }
+            else if state != .idle { return }
+            return
+        }
+        let total = MetaActionValidator.totalDuration(move.steps)
+        stateUntil = Date().addingTimeInterval(total + 0.2)
+        bird.stopIdleAnimations()
+        let action = MoveInterpreter.compile(move.steps, on: bird) { [weak self] text in
+            self?.say(text)
+        }
+        bird.run(action, withKey: "learnedMove")
+        DispatchQueue.main.asyncAfter(deadline: .now() + total + 0.25) { [weak self] in
+            guard let self, self.state == .idle || self.state == .perch else { return }
+            self.bird.zRotation = 0
+            self.bird.setScale(self.growthScale)
+            self.bird.xScale = (self.facingRight ? 1 : -1) * self.growthScale
+            self.bird.position.y = self.feetY
+            self.bird.startIdleAnimations()
+        }
+    }
+
     /// 原地飞:扑腾翅膀小幅升空再落回(不去栖息窗口)。
     private func flyInPlace() {
         guard state == .idle || state == .perch else { return }
@@ -473,7 +536,7 @@ final class PetController: NSObject {
     func celebrateEvolution(to stage: GrowthStage) {
         bird.celebrateEvolution(to: stage)
         bird.flapWings(times: stage == .spirit ? 18 : 12, fast: true)
-        say("我好像长大了一点。")
+        say(L.grewUp)
     }
 
     private func dance() {
@@ -528,9 +591,17 @@ final class PetController: NSObject {
     // MARK: - Perch on frontmost window
 
     private func startPerch() {
-        // don't thrash: at most one perch attempt per 30s
-        guard Date().timeIntervalSince(lastPerchAttempt) > 30 else { return }
-        guard let target = PetController.frontmostWindowInfo() else { return }
+        // don't thrash: at most one perch attempt per 10s
+        guard Date().timeIntervalSince(lastPerchAttempt) > 10 else {
+            Log.info("perch", "冷却中，距上次尝试不到10s")
+            say(L.perchCooldown)
+            return
+        }
+        guard let target = PetController.frontmostWindowInfo() else {
+            Log.info("perch", "找不到可站的窗口")
+            say(L.perchNoWindow)
+            return
+        }
         lastPerchAttempt = Date()
         perchCheckTimer?.invalidate()
         supportSurface = .appWindow(id: target.id, frame: target.frame)
@@ -777,11 +848,40 @@ final class PetController: NSObject {
     func poked() {
         if state == .sleep { wake() }
         bird.setViewDirection(.front)
-        bird.peckOnce()
-        bird.run(.sequence([
-            .moveBy(x: 0, y: 10, duration: 0.1),
-            .moveBy(x: 0, y: -10, duration: 0.12),
-        ]))
+
+        let combo = pokeCombo.registerPoke()
+        let reaction = PokeCombo.reaction(for: combo)
+        switch reaction {
+        case .mild:
+            bird.peckOnce()
+            bird.run(.sequence([
+                .moveBy(x: 0, y: 10, duration: 0.1),
+                .moveBy(x: 0, y: -10, duration: 0.12),
+            ]))
+        case .annoyed:
+            // 有点烦:扭头 + 小幅后仰
+            setFacing(right: !facingRight)
+            bird.tiltHead(true)
+            bird.run(.sequence([
+                .moveBy(x: facingRight ? -6 : 6, y: 0, duration: 0.1),
+                .moveBy(x: facingRight ? 6 : -6, y: 0, duration: 0.12),
+            ]))
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in self?.bird.tiltHead(false) }
+        case .dizzy:
+            // 被戳晕:左右摇晃几下
+            bird.run(.sequence([
+                .rotate(toAngle: 0.18, duration: 0.1),
+                .rotate(toAngle: -0.18, duration: 0.1),
+                .rotate(toAngle: 0.12, duration: 0.1),
+                .rotate(toAngle: 0, duration: 0.1),
+            ]))
+        case .flee:
+            // 受不了,躲到一边
+            perform(action: "retreat")
+        }
+        if let words = reaction.speech, state != .sleep {
+            say(words)
+        }
         onPoke?()
     }
 

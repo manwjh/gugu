@@ -638,6 +638,14 @@ final class BirdNode: SKNode {
         run(blinkLoop, withKey: "blinkLoop")
     }
 
+    /// Stop the looping idle animations (breathing/blinking) so a scripted
+    /// move can take over the body cleanly. Call startIdleAnimations() to resume.
+    func stopIdleAnimations() {
+        body.removeAction(forKey: "breathe")
+        belly.removeAction(forKey: "breathe")
+        removeAction(forKey: "blinkLoop")
+    }
+
     func blinkOnce() {
         guard !eyesClosed, viewDirection != .back else { return }
         for pair in visibleEyeTargets() {
@@ -727,6 +735,16 @@ final class BirdNode: SKNode {
             .moveBy(x: 6, y: 4, duration: 0.2),
             .rotate(toAngle: 0, duration: 0.3),
         ]))
+    }
+
+    /// Stretch: a brief squash-then-stretch with a small wing lift, like a yawny stretch.
+    func stretchOnce() {
+        run(.sequence([
+            .group([.scaleY(to: 0.82, duration: 0.18), .scaleX(to: 1.08, duration: 0.18)]),
+            .group([.scaleY(to: 1.12, duration: 0.22), .scaleX(to: 0.94, duration: 0.22)]),
+            .group([.scaleY(to: 1.0, duration: 0.2), .scaleX(to: 1.0, duration: 0.2)]),
+        ]), withKey: "stretch")
+        flapWings(times: 1)
     }
 
     /// Yawn: head tilts up, beak opens wide, a single sleepy "z" floats up.

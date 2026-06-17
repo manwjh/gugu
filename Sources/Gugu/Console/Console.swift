@@ -12,7 +12,7 @@ final class Console: NSObject, NSWindowDelegate {
     private var chatUserPositioned = false
     private var chatInFlight = 0
     private let quickPanel = NSPopover()
-    private let defaultChatPlaceholder = "对咕咕说..."
+    private var defaultChatPlaceholder: String { L.chatPlaceholder }
 
     init(app: GuguApp) {
         self.app = app
@@ -32,20 +32,10 @@ final class Console: NSObject, NSWindowDelegate {
         if button.image == nil {
             button.title = "🐤"
         }
-        button.toolTip = "咕咕"
-        button.setAccessibilityLabel("咕咕快捷面板")
-        button.target = self
-        button.action = #selector(toggleQuickPanel)
-    }
-
-    @objc private func toggleQuickPanel() {
-        guard let button = statusItem.button else { return }
-        if quickPanel.isShown {
-            quickPanel.performClose(nil)
-        } else {
-            quickPanel.contentViewController = QuickPanelController(console: self)
-            quickPanel.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-        }
+        button.toolTip = L.menuTooltip
+        button.setAccessibilityLabel(L.menuAccessibility)
+        // Left-click shows full menu (standard macOS status item behavior)
+        statusItem.menu = buildMenu()
     }
 
     func buildMenu() -> NSMenu {
@@ -63,23 +53,26 @@ final class Console: NSObject, NSWindowDelegate {
         growth.isEnabled = false
         menu.addItem(growth)
         menu.addItem(.separator())
-        menu.addItem(makeItem("和咕咕说话…", #selector(openChat), "t", icon: "bubble.left.and.text.bubble.right"))
-        menu.addItem(makeItem("戳一下", #selector(pokePet), "p", icon: "hand.tap"))
-        menu.addItem(makeItem("心跳一次(调试)", #selector(forceHeartbeat), "", icon: "heart.text.square"))
-        menu.addItem(makeItem("做梦一次(调试)", #selector(forceDream), "", icon: "moon.zzz"))
+        menu.addItem(makeItem(L.menuChat, #selector(openChat), "t", icon: "bubble.left.and.text.bubble.right"))
+        menu.addItem(makeItem(L.menuPoke, #selector(pokePet), "p", icon: "hand.tap"))
+        menu.addItem(makeItem(L.menuHeartbeatDebug, #selector(forceHeartbeat), "", icon: "heart.text.square"))
+        menu.addItem(makeItem(L.menuDreamDebug, #selector(forceDream), "", icon: "moon.zzz"))
         menu.addItem(.separator())
         let camItem = makeItem(visionToggleTitle(), #selector(toggleCamera), "", icon: app?.visionSensor.enabled == true ? "eye.slash" : "eye")
         menu.addItem(camItem)
         menu.addItem(makeItem(voiceToggleTitle(), #selector(toggleVoice), "", icon: app?.voice.enabled == true ? "speaker.slash" : "speaker.wave.2"))
         menu.addItem(makeItem(listenToggleTitle(), #selector(toggleListen), "", icon: app?.listener.enabled == true ? "mic.slash" : "mic"))
-        menu.addItem(makeItem("今天看到了什么", #selector(openAudit), "", icon: "doc.text.magnifyingglass"))
-        menu.addItem(makeItem("待批准提案", #selector(openProposals), "", icon: "tray.full"))
-        let approve = makeItem("批准下一个提案", #selector(approveNextProposal), "", icon: "checkmark.seal")
+        menu.addItem(makeItem(L.menuAudit, #selector(openAudit), "", icon: "doc.text.magnifyingglass"))
+        menu.addItem(makeItem(L.menuProposals, #selector(openProposals), "", icon: "tray.full"))
+        let approve = makeItem(L.menuApproveNext, #selector(approveNextProposal), "", icon: "checkmark.seal")
         approve.isEnabled = !Evolution(memory: Memory()).pendingProposals().isEmpty
         menu.addItem(approve)
-        menu.addItem(makeItem("打开配置目录", #selector(openConfigDir), "", icon: "folder"))
+        menu.addItem(makeItem(L.menuOpenConfig, #selector(openConfigDir), "", icon: "folder"))
         menu.addItem(.separator())
-        menu.addItem(makeItem("退出", #selector(quit), "q", icon: "power"))
+        let langTitle = L.current == .en ? L.menuLangZH : L.menuLangEN
+        menu.addItem(makeItem(langTitle, #selector(toggleLanguage), "", icon: "globe"))
+        menu.addItem(.separator())
+        menu.addItem(makeItem(L.menuQuit, #selector(quit), "q", icon: "power"))
         return menu
     }
 
@@ -98,23 +91,23 @@ final class Console: NSObject, NSWindowDelegate {
 
     private func statusLine() -> String {
         guard let app else { return "" }
-        let rhythm = app.rhythmSensor.rhythm.rawValue
-        let frozen = app.scheduler.frozen ? " · 勿扰中" : ""
-        let sleeping = app.pet.isSleeping ? " · 睡着了" : ""
-        return "状态 · \(rhythm)\(frozen)\(sleeping)"
+        let rhythm = app.rhythmSensor.rhythm.displayName
+        let frozen = app.scheduler.frozen ? " · \(L.statusDND)" : ""
+        let sleeping = app.pet.isSleeping ? " · \(L.statusSleeping)" : ""
+        return "\(L.statusPrefix) · \(rhythm)\(frozen)\(sleeping)"
     }
 
     func statusShort() -> String {
         guard let app else { return "-" }
-        if app.pet.isSleeping { return "睡" }
-        if app.scheduler.frozen { return "静" }
+        if app.pet.isSleeping { return L.shortSleep }
+        if app.scheduler.frozen { return L.shortDND }
         switch app.rhythmSensor.rhythm {
-        case .focused: return "专"
-        case .busy: return "忙"
-        case .breather: return "歇"
-        case .away: return "离"
-        case .active: return "闲"
-        case .agitated: return "躁"
+        case .focused: return L.shortFocused
+        case .busy: return L.shortBusy
+        case .breather: return L.shortBreather
+        case .away: return L.shortAway
+        case .active: return L.shortActive
+        case .agitated: return L.shortAgitated
         }
     }
 
@@ -129,27 +122,72 @@ final class Console: NSObject, NSWindowDelegate {
         let state = PetState.load()
         let stage = GrowthStage(rawStage: state.stage)
         let pending = Evolution(memory: Memory()).pendingProposals().count
-        let suffix = pending > 0 ? " · \(pending) 个提案待批" : ""
-        return "形态 · \(stage.displayName)\(suffix)"
+        let suffix = pending > 0 ? " · \(L.proposalsPending(pending))" : ""
+        return "\(L.growthPrefix) · \(stage.displayName)\(suffix)"
     }
 
     func stageShort() -> String {
         GrowthStage(rawStage: PetState.load().stage).shortName
     }
 
-    func refreshMenu() {
-        statusItem.menu = nil
-        if quickPanel.isShown {
-            quickPanel.contentViewController = QuickPanelController(console: self)
+    /// Quick context menu for right-clicking the pet (high-frequency actions only).
+    func buildQuickMenu() -> NSMenu {
+        let menu = NSMenu()
+        menu.addItem(makeItem(L.menuChat, #selector(openChat), "t", icon: "bubble.left.and.text.bubble.right"))
+        menu.addItem(makeItem(L.menuPoke, #selector(pokePet), "p", icon: "hand.tap"))
+        menu.addItem(.separator())
+        let camItem = makeItem(visionToggleTitle(), #selector(toggleCamera), "", icon: app?.visionSensor.enabled == true ? "eye.slash" : "eye")
+        menu.addItem(camItem)
+        menu.addItem(makeItem(voiceToggleTitle(), #selector(toggleVoice), "", icon: app?.voice.enabled == true ? "speaker.slash" : "speaker.wave.2"))
+        menu.addItem(makeItem(listenToggleTitle(), #selector(toggleListen), "", icon: app?.listener.enabled == true ? "mic.slash" : "mic"))
+        menu.addItem(.separator())
+        let actions = NSMenuItem(title: L.menuActions, action: nil, keyEquivalent: "")
+        actions.image = symbol("star")
+        let sub = NSMenu()
+        sub.addItem(makeItem(L.menuDance, #selector(dancePet), "", icon: "music.note"))
+        sub.addItem(makeItem(L.menuHop, #selector(hopPet), "", icon: "arrow.up.circle"))
+        sub.addItem(makeItem(L.menuFly, #selector(flyPet), "", icon: "wind"))
+        sub.addItem(makeItem(L.menuPerch, #selector(perchPet), "", icon: "rectangle.on.rectangle"))
+        sub.addItem(makeItem(L.menuSettle, #selector(settlePet), "", icon: "chair"))
+        sub.addItem(makeItem(L.menuGroom, #selector(groomPet), "", icon: "sparkles"))
+        sub.addItem(makeItem(L.menuSleep, #selector(sleepPet), "", icon: "moon"))
+        // 学会的动作(动作进化产物)动态列出,点一下就演。
+        let learned = MoveLibrary.shared.learnedMoves
+        if !learned.isEmpty {
+            sub.addItem(.separator())
+            for move in learned {
+                let item = NSMenuItem(title: "✨ \(move.name)", action: #selector(performLearnedMoveItem(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = move.name
+                item.image = symbol("wand.and.stars")
+                sub.addItem(item)
+            }
         }
+        actions.submenu = sub
+        menu.addItem(actions)
+        menu.addItem(.separator())
+        menu.addItem(makeItem(L.menuQuit, #selector(quit), "q", icon: "power"))
+        return menu
+    }
+
+    func refreshMenu() {
+        statusItem.menu = buildMenu()
     }
 
     // MARK: - Actions
 
+    @objc func toggleLanguage() {
+        let newLang = L.current == .en ? "zh" : "en"
+        L.current = newLang == "zh" ? .zh : .en
+        UserDefaults.standard.set(newLang, forKey: "gugu.language")
+        refreshMenu()
+        app?.pet.say(L.langSwitched)
+    }
+
     @objc func pokePet() { app?.pet.poked() }
 
     @objc func showAbilities() {
-        app?.pet.say("我会聊天、跳舞、蹦一下、飞一下、理毛,也能看你回来、听唤醒词。")
+        app?.pet.say(L.abilitiesSpeech)
     }
 
     @objc func dancePet() { app?.pet.perform(action: "dance") }
@@ -166,19 +204,25 @@ final class Console: NSObject, NSWindowDelegate {
 
     @objc func sleepPet() { app?.pet.perform(action: "sleep") }
 
+    /// 演一个学会的动作(菜单项用 representedObject 携带动作名)。
+    @objc func performLearnedMoveItem(_ sender: NSMenuItem) {
+        guard let name = sender.representedObject as? String else { return }
+        app?.pet.perform(action: name)
+    }
+
     @objc func forceHeartbeat() { app?.scheduler.requestHeartbeat(force: true) }
 
     @objc func forceDream() {
         guard let app else { return }
         app.pet.sleep()
-        app.pet.say("(进入梦乡…)")
+        app.pet.say(L.dreamEnter)
         Task {
             do {
                 let r = try await app.scheduler.dreamNow()
                 app.pet.wake()
                 if !r.morningWords.isEmpty { app.pet.say(r.morningWords) }
                 if let title = r.proposalTitle {
-                    app.pet.say("我梦见自己好像能长大了。\(title),等你批准。")
+                    app.pet.say(L.dreamProposal(title))
                 }
                 app.refreshGrowthState()
             } catch {
@@ -210,11 +254,21 @@ final class Console: NSObject, NSWindowDelegate {
                 if let newStage = applied.newStage {
                     app.pet.celebrateEvolution(to: newStage)
                 } else {
-                    app.pet.say("批准了。\(applied.title)")
+                    app.pet.say(L.proposalApproved(applied.title))
                 }
-                EventBus.shared.post(kind: "proposal", summary: "主人批准提案:\(applied.title)", weight: 25)
+                // 学会新动作:计入进度(驱动里程碑),并立刻演一遍给主人看。
+                if proposal.path.lastPathComponent.hasPrefix("move-") {
+                    app.afterInteraction(.learnedMove, surface: false)
+                    let moveName = applied.target.deletingPathExtension().lastPathComponent
+                    if MoveLibrary.shared.move(named: moveName) != nil {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak app] in
+                            app?.pet.perform(action: moveName)
+                        }
+                    }
+                }
+                EventBus.shared.post(kind: "proposal", summary: L.eventProposalApproved(applied.title), weight: 25)
             } catch {
-                app.pet.say("这个提案没法批准。")
+                app.pet.say(L.proposalFailed)
                 Log.info("proposal", "批准失败: \(error)")
             }
         }
@@ -223,7 +277,7 @@ final class Console: NSObject, NSWindowDelegate {
 
     private func visionToggleTitle() -> String {
         let on = app?.visionSensor.enabled ?? false
-        return on ? "让咕咕闭上眼睛(关摄像头)" : "让咕咕睁眼看你(开摄像头·仅本机)"
+        return on ? L.toggleCameraOn : L.toggleCameraOff
     }
 
     func cameraIconName() -> String {
@@ -235,9 +289,9 @@ final class Console: NSObject, NSWindowDelegate {
         let newVal = !app.visionSensor.enabled
         app.visionSensor.enabled = newVal
         if newVal {
-            app.pet.say("(咕咕睁开眼睛看了看你)")
+            app.pet.say(L.cameraOpened)
         } else {
-            app.pet.say("(咕咕闭上了眼睛)")
+            app.pet.say(L.cameraClosed)
         }
         refreshMenu()
     }
@@ -247,7 +301,7 @@ final class Console: NSObject, NSWindowDelegate {
     }
 
     private func voiceToggleTitle() -> String {
-        (app?.voice.enabled ?? false) ? "让咕咕安静(关朗读)" : "让咕咕出声说话(本地朗读)"
+        (app?.voice.enabled ?? false) ? L.toggleVoiceOn : L.toggleVoiceOff
     }
 
     func voiceIconName() -> String {
@@ -258,24 +312,24 @@ final class Console: NSObject, NSWindowDelegate {
         guard let app else { return }
         app.voice.enabled.toggle()
         if app.voice.enabled {
-            app.pet.say("咕!")   // 立刻出一声,验证能发声
+            app.pet.say(L.voiceTest)   // 立刻出一声,验证能发声
         }
         refreshMenu()
     }
 
     private func listenToggleTitle() -> String {
-        guard let app else { return "对咕咕说话(开麦克风)" }
+        guard let app else { return L.toggleListenOff }
         switch app.listener.status {
         case .off:
-            return "对咕咕说话(开麦克风)"
+            return L.toggleListenOff
         case .starting:
-            return "咕咕正在接入麦克风..."
+            return L.toggleListenStarting
         case .listening:
-            return "咕咕正在听(关麦克风)"
+            return L.toggleListenListening
         case .muted:
-            return "咕咕说话中,稍后继续听(关麦克风)"
-        case .unavailable(let reason):
-            return "麦克风不可用:\(reason)"
+            return L.toggleListenMuted
+        case .unavailable:
+            return L.toggleListenUnavailable
         }
     }
 
@@ -377,11 +431,11 @@ final class Console: NSObject, NSWindowDelegate {
         content.layer?.borderColor = NSColor(calibratedWhite: 0.6, alpha: 0.22).cgColor
 
         let dragHandle = DraggableHandleView(frame: NSRect(x: 8, y: 8, width: 28, height: 30))
-        dragHandle.toolTip = "拖动输入框"
-        dragHandle.setAccessibilityLabel("拖动输入框")
+        dragHandle.toolTip = L.chatDragTooltip
+        dragHandle.setAccessibilityLabel(L.chatDragTooltip)
         let handleImage = NSImage(systemSymbolName: "arrow.up.and.down.and.arrow.left.and.right",
-                                  accessibilityDescription: "拖动输入框")
-            ?? NSImage(systemSymbolName: "line.3.horizontal", accessibilityDescription: "拖动输入框")
+                                  accessibilityDescription: L.chatDragTooltip)
+            ?? NSImage(systemSymbolName: "line.3.horizontal", accessibilityDescription: L.chatDragTooltip)
         if let image = handleImage {
             dragHandle.image = image
             dragHandle.contentTintColor = NSColor.tertiaryLabelColor
@@ -413,12 +467,12 @@ final class Console: NSObject, NSWindowDelegate {
         close.isBordered = false
         close.imagePosition = .imageOnly
         close.imageScaling = .scaleProportionallyDown
-        close.toolTip = "关闭输入框"
-        close.setAccessibilityLabel("关闭输入框")
-        if let image = NSImage(systemSymbolName: "keyboard.chevron.compact.down", accessibilityDescription: "关闭输入框") {
+        close.toolTip = L.chatCloseTooltip
+        close.setAccessibilityLabel(L.chatCloseTooltip)
+        if let image = NSImage(systemSymbolName: "keyboard.chevron.compact.down", accessibilityDescription: L.chatCloseTooltip) {
             close.image = image
             close.contentTintColor = NSColor.secondaryLabelColor
-        } else if let image = NSImage(systemSymbolName: "xmark.circle.fill", accessibilityDescription: "关闭输入框") {
+        } else if let image = NSImage(systemSymbolName: "xmark.circle.fill", accessibilityDescription: L.chatCloseTooltip) {
             close.image = image
             close.contentTintColor = NSColor.secondaryLabelColor
         } else {
@@ -444,9 +498,10 @@ final class Console: NSObject, NSWindowDelegate {
             app.pet.perch(on: chatWindow.frame)
         }
         setChatLoading(true)
-        EventBus.shared.post(kind: "chat", summary: "主人和你聊天:\(String(text.prefix(40)))", weight: 0)
+        EventBus.shared.post(kind: "chat", summary: L.eventChat(String(text.prefix(40))), weight: 0)
         app.affect.chatted()
         PetState.recordBondGain(Affect.bondGainChatted)
+        app.afterChat()
         if app.pet.isSleeping { app.pet.wake() }
         if let local = app.brain.handleLocalCommand(text) {
             if local.action != "idle" {
@@ -455,6 +510,11 @@ final class Console: NSObject, NSWindowDelegate {
             if !local.reply.isEmpty {
                 app.pet.say(local.reply)
             }
+            refreshMenu()
+            setChatLoading(false)
+            return
+        }
+        if app.tryStartLearnMove(text) {
             refreshMenu()
             setChatLoading(false)
             return
@@ -476,30 +536,15 @@ final class Console: NSObject, NSWindowDelegate {
                     setChatStatus(Console.actionLabel(result.action), transient: true)
                 }
             } catch {
-                setChatStatus("咕咕没听清。", transient: true)
+                setChatStatus(L.chatFailed, transient: true)
                 Log.info("chat", "失败: \(error)")
             }
         }
     }
 
-    /// 把动作 enum 翻成中文,纯文本聊天记录里好读。
+    /// 把动作 enum 翻成可读文字,纯文本聊天记录里好读。
     private static func actionLabel(_ a: String) -> String {
-        switch a {
-        case "come", "approach": return "扑棱扑棱跑过来了"
-        case "walk": return "走了两步"
-        case "fly": return "飞了起来"
-        case "perch": return "飞上去站住了"
-        case "settle", "sit": return "蹲下来,把脚收进羽毛里歇着"
-        case "dance": return "晃起身子来"
-        case "hop", "jump": return "蹦了一下"
-        case "nod", "yes": return "一点一点地点头"
-        case "stare": return "歪头盯着你"
-        case "peck": return "啄了啄"
-        case "groom": return "理了理毛"
-        case "retreat", "away": return "扭头走开了"
-        case "sleep": return "打起瞌睡"
-        default: return a
-        }
+        L.actionLabel(a)
     }
 
     private func setChatLoading(_ loading: Bool) {
@@ -511,7 +556,7 @@ final class Console: NSObject, NSWindowDelegate {
         chatInput?.isEnabled = true
         chatInput?.isHidden = false
         chatCloseButton?.isEnabled = true
-        setChatStatus(chatInFlight > 0 ? "咕咕在想..." : "", transient: false)
+        setChatStatus(chatInFlight > 0 ? L.chatThinking : "", transient: false)
         refocusChatInput()
     }
 
@@ -589,13 +634,13 @@ private final class QuickPanelController: NSViewController {
     init(console: Console) {
         self.console = console
         super.init(nibName: nil, bundle: nil)
-        preferredContentSize = NSSize(width: 236, height: 308)
+        preferredContentSize = NSSize(width: 240, height: 420)
     }
 
     required init?(coder: NSCoder) { nil }
 
     override func loadView() {
-        view = NSView(frame: NSRect(x: 0, y: 0, width: 236, height: 308))
+        view = NSView(frame: NSRect(x: 0, y: 0, width: 240, height: 420))
         view.wantsLayer = true
         view.layer?.backgroundColor = NSColor.clear.cgColor
         build()
@@ -603,58 +648,170 @@ private final class QuickPanelController: NSViewController {
 
     private func build() {
         guard let console else { return }
+        let contentWidth: CGFloat = 216
+
         let root = NSStackView(frame: view.bounds.insetBy(dx: 12, dy: 10))
         root.orientation = .vertical
-        root.alignment = .leading
-        root.spacing = 10
+        root.alignment = .centerX
+        root.spacing = 8
         root.autoresizingMask = [.width, .height]
         view.addSubview(root)
 
+        // --- Status chips ---
         let statusRow = NSStackView()
         statusRow.orientation = .horizontal
         statusRow.spacing = 6
         statusRow.distribution = .fillEqually
-        statusRow.widthAnchor.constraint(equalToConstant: 212).isActive = true
+        statusRow.widthAnchor.constraint(equalToConstant: contentWidth).isActive = true
         statusRow.addArrangedSubview(chip(title: console.statusShort(), icon: "gauge.with.dots.needle.bottom.50percent"))
         statusRow.addArrangedSubview(chip(title: console.budgetShort(), icon: "chart.pie"))
         statusRow.addArrangedSubview(chip(title: console.stageShort(), icon: "sparkles"))
         root.addArrangedSubview(statusRow)
 
-        let buttons = [
-            ("说话", "bubble.left.and.text.bubble.right", #selector(Console.openChat)),
-            ("戳一下", "hand.tap", #selector(Console.pokePet)),
-            ("才艺", "star", #selector(Console.showAbilities)),
-            ("跳舞", "music.note", #selector(Console.dancePet)),
-            ("蹦跳", "arrow.up.circle", #selector(Console.hopPet)),
-            ("飞一下", "wind", #selector(Console.flyPet)),
-            ("站窗口", "rectangle.on.rectangle", #selector(Console.perchPet)),
-            ("蹲坐", "chair", #selector(Console.settlePet)),
-            ("理毛", "sparkles", #selector(Console.groomPet)),
-            ("睡觉", "moon", #selector(Console.sleepPet)),
-            ("心跳", "heart.text.square", #selector(Console.forceHeartbeat)),
-            ("做梦", "moon.zzz", #selector(Console.forceDream)),
-            ("摄像头", console.cameraIconName(), #selector(Console.toggleCamera)),
-            ("朗读", console.voiceIconName(), #selector(Console.toggleVoice)),
-            ("麦克风", console.listenIconName(), #selector(Console.toggleListen)),
-            ("审计", "doc.text.magnifyingglass", #selector(Console.openAudit)),
-            ("提案", "tray.full", #selector(Console.openProposals)),
-            ("批准", "checkmark.seal", #selector(Console.approveNextProposal)),
-            ("配置", "folder", #selector(Console.openConfigDir)),
-            ("退出", "power", #selector(Console.quit)),
-        ] as [(String, String, Selector)]
+        // --- Main action buttons (large, with text) ---
+        let mainRow = NSStackView()
+        mainRow.orientation = .horizontal
+        mainRow.spacing = 8
+        mainRow.distribution = .fillEqually
+        mainRow.widthAnchor.constraint(equalToConstant: contentWidth).isActive = true
+        mainRow.addArrangedSubview(primaryButton(label: L.panelTalk, symbol: "bubble.left.and.text.bubble.right", action: #selector(Console.openChat)))
+        mainRow.addArrangedSubview(primaryButton(label: L.panelPoke, symbol: "hand.tap", action: #selector(Console.pokePet)))
+        root.addArrangedSubview(mainRow)
 
-        for row in 0..<5 {
-            let rowView = NSStackView()
-            rowView.orientation = .horizontal
-            rowView.spacing = 8
-            rowView.distribution = .fillEqually
-            rowView.widthAnchor.constraint(equalToConstant: 212).isActive = true
-            for col in 0..<4 {
-                let item = buttons[row * 4 + col]
-                rowView.addArrangedSubview(iconButton(label: item.0, symbol: item.1, action: item.2))
-            }
-            root.addArrangedSubview(rowView)
+        // --- Sensory toggles ---
+        let senseRow = NSStackView()
+        senseRow.orientation = .horizontal
+        senseRow.spacing = 8
+        senseRow.distribution = .fillEqually
+        senseRow.widthAnchor.constraint(equalToConstant: contentWidth).isActive = true
+        senseRow.addArrangedSubview(toggleButton(label: L.panelCamera, symbol: console.cameraIconName(), action: #selector(Console.toggleCamera), on: console.cameraIconName() == "eye.slash"))
+        senseRow.addArrangedSubview(toggleButton(label: L.panelVoice, symbol: console.voiceIconName(), action: #selector(Console.toggleVoice), on: console.voiceIconName() == "speaker.slash"))
+        senseRow.addArrangedSubview(toggleButton(label: L.panelMic, symbol: console.listenIconName(), action: #selector(Console.toggleListen), on: console.listenIconName() == "mic.fill" || console.listenIconName() == "mic.slash"))
+        root.addArrangedSubview(senseRow)
+
+        // --- Action icons row ---
+        let actionRow = NSStackView()
+        actionRow.orientation = .horizontal
+        actionRow.spacing = 4
+        actionRow.distribution = .fillEqually
+        actionRow.widthAnchor.constraint(equalToConstant: contentWidth).isActive = true
+        let actions: [(String, String, Selector)] = [
+            (L.menuDance, "music.note", #selector(Console.dancePet)),
+            (L.menuHop, "arrow.up.circle", #selector(Console.hopPet)),
+            (L.menuFly, "wind", #selector(Console.flyPet)),
+            (L.menuPerch, "rectangle.on.rectangle", #selector(Console.perchPet)),
+            (L.menuSettle, "chair", #selector(Console.settlePet)),
+            (L.menuGroom, "sparkles", #selector(Console.groomPet)),
+            (L.menuSleep, "moon", #selector(Console.sleepPet)),
+        ]
+        for item in actions {
+            actionRow.addArrangedSubview(smallIconButton(label: item.0, symbol: item.1, action: item.2))
         }
+        root.addArrangedSubview(actionRow)
+
+        // --- Separator ---
+        root.addArrangedSubview(separator(width: contentWidth))
+
+        // --- Menu list ---
+        let menuItems: [(String, String, Selector)] = [
+            (L.panelAbilities, "star", #selector(Console.showAbilities)),
+            (L.menuAudit, "doc.text.magnifyingglass", #selector(Console.openAudit)),
+            (L.menuProposals, "tray.full", #selector(Console.openProposals)),
+            (L.menuApproveNext, "checkmark.seal", #selector(Console.approveNextProposal)),
+            (L.menuHeartbeatDebug, "heart.text.square", #selector(Console.forceHeartbeat)),
+            (L.menuDreamDebug, "moon.zzz", #selector(Console.forceDream)),
+            (L.menuOpenConfig, "folder", #selector(Console.openConfigDir)),
+            (L.menuQuit, "power", #selector(Console.quit)),
+        ]
+        for item in menuItems {
+            let row = menuRow(label: item.0, symbol: item.1, action: item.2)
+            row.widthAnchor.constraint(equalToConstant: contentWidth).isActive = true
+            root.addArrangedSubview(row)
+        }
+    }
+
+    // MARK: - Components
+
+    private func primaryButton(label: String, symbol: String, action: Selector) -> NSButton {
+        let button = NSButton(frame: .zero)
+        button.bezelStyle = .texturedRounded
+        button.isBordered = true
+        button.image = self.symbol(symbol)
+        button.title = label
+        button.imagePosition = .imageLeading
+        button.imageScaling = .scaleProportionallyDown
+        button.font = NSFont.systemFont(ofSize: 13, weight: .medium)
+        button.contentTintColor = .labelColor
+        button.target = console
+        button.action = action
+        button.toolTip = label
+        button.setAccessibilityLabel(label)
+        button.heightAnchor.constraint(equalToConstant: 36).isActive = true
+        return button
+    }
+
+    private func toggleButton(label: String, symbol: String, action: Selector, on: Bool) -> NSButton {
+        let button = NSButton(frame: .zero)
+        button.bezelStyle = .texturedRounded
+        button.isBordered = true
+        button.image = self.symbol(symbol)
+        button.title = label
+        button.imagePosition = .imageAbove
+        button.imageScaling = .scaleProportionallyDown
+        button.font = NSFont.systemFont(ofSize: 10)
+        button.contentTintColor = on ? .controlAccentColor : .tertiaryLabelColor
+        button.target = console
+        button.action = action
+        button.toolTip = label
+        button.setAccessibilityLabel(label)
+        button.heightAnchor.constraint(equalToConstant: 44).isActive = true
+        return button
+    }
+
+    private func smallIconButton(label: String, symbol: String, action: Selector) -> NSButton {
+        let button = NSButton(frame: .zero)
+        button.bezelStyle = .texturedRounded
+        button.isBordered = false
+        button.image = self.symbol(symbol)
+        button.imagePosition = .imageOnly
+        button.imageScaling = .scaleProportionallyDown
+        button.contentTintColor = .secondaryLabelColor
+        button.target = console
+        button.action = action
+        button.toolTip = label
+        button.setAccessibilityLabel(label)
+        button.widthAnchor.constraint(equalToConstant: 28).isActive = true
+        button.heightAnchor.constraint(equalToConstant: 28).isActive = true
+        return button
+    }
+
+    private func menuRow(label: String, symbol: String, action: Selector) -> NSView {
+        let row = MenuRowView(target: console, action: action)
+        row.translatesAutoresizingMaskIntoConstraints = false
+        row.heightAnchor.constraint(equalToConstant: 28).isActive = true
+
+        let imageView = NSImageView(frame: .zero)
+        imageView.image = self.symbol(symbol)
+        imageView.contentTintColor = .secondaryLabelColor
+        imageView.translatesAutoresizingMaskIntoConstraints = false
+        row.addSubview(imageView)
+
+        let text = NSTextField(labelWithString: label)
+        text.font = NSFont.systemFont(ofSize: 13)
+        text.textColor = .labelColor
+        text.translatesAutoresizingMaskIntoConstraints = false
+        row.addSubview(text)
+
+        NSLayoutConstraint.activate([
+            imageView.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: 8),
+            imageView.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+            imageView.widthAnchor.constraint(equalToConstant: 16),
+            imageView.heightAnchor.constraint(equalToConstant: 16),
+            text.leadingAnchor.constraint(equalTo: imageView.trailingAnchor, constant: 8),
+            text.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+            text.trailingAnchor.constraint(lessThanOrEqualTo: row.trailingAnchor, constant: -8),
+        ])
+        return row
     }
 
     private func chip(title: String, icon: String) -> NSView {
@@ -678,27 +835,61 @@ private final class QuickPanelController: NSViewController {
         return box
     }
 
-    private func iconButton(label: String, symbol: String, action: Selector) -> NSButton {
-        let button = NSButton(frame: NSRect(x: 0, y: 0, width: 47, height: 42))
-        button.bezelStyle = .texturedRounded
-        button.isBordered = false
-        button.image = self.symbol(symbol)
-        button.imagePosition = .imageOnly
-        button.imageScaling = .scaleProportionallyDown
-        button.contentTintColor = .labelColor
-        button.target = console
-        button.action = action
-        button.toolTip = label
-        button.setAccessibilityLabel(label)
-        button.widthAnchor.constraint(equalToConstant: 47).isActive = true
-        button.heightAnchor.constraint(equalToConstant: 42).isActive = true
-        return button
+    private func separator(width: CGFloat) -> NSView {
+        let sep = NSBox(frame: NSRect(x: 0, y: 0, width: width, height: 1))
+        sep.boxType = .separator
+        sep.widthAnchor.constraint(equalToConstant: width).isActive = true
+        return sep
     }
 
     private func symbol(_ name: String) -> NSImage? {
         let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)
         image?.isTemplate = true
         return image
+    }
+}
+
+// MARK: - MenuRowView (clickable row with hover highlight)
+
+private final class MenuRowView: NSView {
+    private weak var target: AnyObject?
+    private var action: Selector?
+    private var trackingArea: NSTrackingArea?
+
+    init(target: AnyObject?, action: Selector?) {
+        self.target = target
+        self.action = action
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 6
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let existing = trackingArea { removeTrackingArea(existing) }
+        trackingArea = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow], owner: self, userInfo: nil)
+        addTrackingArea(trackingArea!)
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.06).cgColor
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        layer?.backgroundColor = NSColor.clear.cgColor
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.12).cgColor
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        layer?.backgroundColor = NSColor.clear.cgColor
+        if let target, let action, bounds.contains(convert(event.locationInWindow, from: nil)) {
+            NSApp.sendAction(action, to: target, from: self)
+        }
     }
 }
 

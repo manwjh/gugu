@@ -18,8 +18,14 @@ final class GuguApp: NSObject, NSApplicationDelegate {
     var console: Console!
     private var minuteTimer: Timer?
 
+    /// 本次会话是否已经吐过一条引导提示(每次启动至多一条,避免话痨)。
+    private var hintShownThisSession = false
+    /// 上次"软提示"(引导/里程碑)的时间,做个全局冷却。
+    private var lastSoftPromptAt = Date.distantPast
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         config = Config.load()
+        L.current = config.language == "zh" ? .zh : .en
         let state = PetState.load()
         budget = Budget(dailyTokens: GrowthStage.adjustedDailyTokens(base: config.dailyTokens,
                                                                      stage: GrowthStage(rawStage: state.stage)))
@@ -51,7 +57,7 @@ final class GuguApp: NSObject, NSApplicationDelegate {
         Paths.pruneOldEvents()
 
         Log.info("app", "咕咕醒了。\(budget.statusLine)")
-        EventBus.shared.post(kind: "wake", summary: "咕咕来到了主人的桌面", weight: 10)
+        EventBus.shared.post(kind: "wake", summary: L.eventWake, weight: 10)
 
         // immediate local greeting (zero-cost): warmer if we already know the owner
         let state0 = PetState.load()
@@ -59,11 +65,11 @@ final class GuguApp: NSObject, NSApplicationDelegate {
             guard let self else { return }
             let greeting: String
             if state0.days_together <= 0 {
-                greeting = "咕?(歪头看了看你)"
+                greeting = L.greetingNew
             } else if state0.bond > 0.5 {
-                greeting = "你来啦!"
+                greeting = L.greetingBonded
             } else {
-                greeting = "咕咕。"
+                greeting = L.greetingDefault
             }
             self.pet.say(greeting)
             self.pet.bird.flapWings(times: 2)
@@ -109,7 +115,7 @@ final class GuguApp: NSObject, NSApplicationDelegate {
         }
         scheduler.onBudgetSleep = { [weak self] in
             guard let self, !self.pet.isSleeping else { return }
-            self.pet.say("(今天想了好多事,有点困了…)")
+            self.pet.say(L.budgetSleepy)
             self.pet.sleep()
         }
 
@@ -117,25 +123,36 @@ final class GuguApp: NSObject, NSApplicationDelegate {
         pet.onPoke = { [weak self] in
             guard let self else { return }
             self.affect.poked()
-            EventBus.shared.post(kind: "poke", summary: "主人戳了你一下", weight: 20)
+            EventBus.shared.post(kind: "poke", summary: L.eventPoke, weight: 20)
             var state = PetState.load(); state.interactions += 1; state.save()
+            self.afterInteraction(.poke)
         }
         pet.onPet = { [weak self] in
             guard let self else { return }
             self.affect.petted()
-            EventBus.shared.post(kind: "petted", summary: "主人摸了摸你", weight: 22)
+            EventBus.shared.post(kind: "petted", summary: L.eventPetted, weight: 22)
             var state = PetState.load()
             state.interactions += 1
             state.bond = min(1, state.bond + Affect.bondGainPetted)
             state.save()
+            self.afterInteraction(.pet)
         }
         pet.onThrown = { [weak self] in
             guard let self else { return }
             self.affect.thrown()
-            EventBus.shared.post(kind: "thrown", summary: "主人把你扔了出去,摔了个跟头", weight: 25)
+            EventBus.shared.post(kind: "thrown", summary: L.eventThrown, weight: 25)
+            self.afterInteraction(.throwOut)
         }
         pet.menuProvider = { [weak self] in
-            self?.console.buildMenu() ?? NSMenu()
+            self?.console.buildQuickMenu() ?? NSMenu()
+        }
+        // idle 自娱自乐:读取当下心情 + 偶尔挑一个学会/内置动作来玩
+        pet.idleMoodProvider = { [weak self] in
+            guard let self else { return (energy: 0.7, valence: 0.15) }
+            return (energy: self.affect.energy, valence: self.affect.valence)
+        }
+        pet.idlePlayMoveProvider = {
+            MoveLibrary.shared.moves.randomElement()?.name
         }
 
         // rhythm transitions wake/greet behavior
@@ -160,9 +177,9 @@ final class GuguApp: NSObject, NSApplicationDelegate {
             if present {
                 self.affect.ownerReturned()
                 if self.pet.isSleeping && !self.affect.isSleepyTime { self.pet.wake() }
-                EventBus.shared.post(kind: "see_return", summary: "你看见主人回到座位上了", weight: 28)
+                EventBus.shared.post(kind: "see_return", summary: L.eventSeeReturn, weight: 28)
             } else {
-                EventBus.shared.post(kind: "see_leave", summary: "你看见主人离开了座位", weight: 5)
+                EventBus.shared.post(kind: "see_leave", summary: L.eventSeeLeave, weight: 5)
             }
         }
         visionSensor.onSmile = { [weak self] in
@@ -170,7 +187,7 @@ final class GuguApp: NSObject, NSApplicationDelegate {
             self.affect.petted()  // a smile warms the bird like a pat
             self.pet.bird.showBlush(true)
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in self?.pet.bird.showBlush(false) }
-            EventBus.shared.post(kind: "see_smile", summary: "你看见主人在笑", weight: 18)
+            EventBus.shared.post(kind: "see_smile", summary: L.eventSeeSmile, weight: 18)
         }
         visionSensor.onExpression = { expression in
             switch expression {
@@ -232,9 +249,10 @@ final class GuguApp: NSObject, NSApplicationDelegate {
     private func handleVoiceCommand(_ command: String) {
         let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        EventBus.shared.post(kind: "voice", summary: "主人对你说:\(String(trimmed.prefix(40)))", weight: 0)
+        EventBus.shared.post(kind: "voice", summary: L.eventVoice(String(trimmed.prefix(40))), weight: 0)
         affect.chatted()
         PetState.recordBondGain(Affect.bondGainChatted)
+        afterChat()
         if pet.isSleeping { pet.wake() }
         pet.bird.tiltHead(true)
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in self?.pet.bird.tiltHead(false) }
@@ -243,6 +261,7 @@ final class GuguApp: NSObject, NSApplicationDelegate {
             if !local.reply.isEmpty { pet.say(local.reply) }
             return
         }
+        if tryStartLearnMove(trimmed) { return }
         Task { [weak self] in
             guard let self else { return }
             do {
@@ -254,13 +273,128 @@ final class GuguApp: NSObject, NSApplicationDelegate {
                 if !result.reply.isEmpty { self.pet.say(result.reply) }  // say→气泡+朗读
             } catch {
                 Log.info("voice", "对话失败: \(error)")
-                self.pet.say("我刚才没听明白,你再说一遍。")
+                self.pet.say(L.voiceFailed)
             }
         }
     }
 
-    func setVoiceConversationEnabled(_ enabled: Bool) {
-        if enabled {
+    /// 主人想教咕咕一个新动作时的入口(打字/语音共用)。
+    /// 命中则启动"学习"链路:模型出草稿 → 生成 move_add 提案 → 它开口请主人批准。
+    /// 返回 true 表示已接管,调用方不必再走普通对话。
+    func tryStartLearnMove(_ text: String) -> Bool {
+        guard let intent = LearnMoveParser.parse(text) else { return false }
+        // 已经会了就直接演,不重复学。
+        if let existing = MoveLibrary.shared.move(named: intent)
+            ?? MoveLibrary.shared.matchTrigger(in: intent) {
+            pet.say(L.learnAlreadyKnow)
+            pet.perform(action: existing.name)
+            return true
+        }
+        pet.bird.tiltHead(true)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) { [weak self] in self?.pet.bird.tiltHead(false) }
+        pet.say(L.learnTrying(intent))
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let draft = try await self.brain.learnMove(intent: intent)
+                guard draft.feasible, !draft.move.steps.isEmpty else {
+                    self.pet.say(L.learnCantDo)
+                    return
+                }
+                _ = try ProposalEngine().writeMoveProposal(draft.move)
+                EventBus.shared.post(kind: "learn_move",
+                                     summary: "咕咕想学会「\(draft.move.name)」,生成了待批准提案",
+                                     weight: 15)
+                self.pet.say(L.learnGotDraft(draft.move.name))
+                self.console.refreshMenu()
+            } catch {
+                Log.info("learn_move", "学习失败: \(error)")
+                self.pet.say(L.learnFailed)
+            }
+        }
+        return true
+    }
+
+    /// 互动类型,驱动进度计数 + 引导/里程碑。
+    enum InteractionKind { case poke, pet, throwOut, chat, learnedMove }
+
+    /// 每次互动后:更新软进度计数,然后**择机**冒一个里程碑或一条引导提示。
+    /// 里程碑优先(更有奖励感);其次引导;大多数时候什么都不冒。全本地零成本。
+    /// `surface=false` 只记账不冒泡(用于聊天——回复本身已经是响应,避免抢话)。
+    func afterInteraction(_ kind: InteractionKind, surface: Bool = true) {
+        var progress = ProgressState.load()
+        switch kind {
+        case .poke: progress.pokeCount += 1
+        case .pet: progress.petCount += 1
+        case .throwOut: progress.throwCount += 1
+        case .chat: progress.chatCount += 1
+        case .learnedMove: progress.movesLearned += 1
+        }
+        progress.save()
+
+        guard surface else { return }
+
+        // 里程碑:跨过阈值就庆祝(高水位保证只一次)。摔出去那一下不庆祝(它在生气)。
+        if kind != .throwOut {
+            let petState = PetState.load()
+            let reached = Milestones.newlyReached(progress: progress, state: petState)
+            if let m = reached.first {
+                for r in reached { progress.markMilestoneReached(r.id) }
+                progress.save()
+                celebrateMilestone(m)
+                return
+            }
+        }
+
+        // 引导:每会话至多一条、全局冷却 ≥45s、被生气时不提。
+        maybeShowHint(progress: progress, suppress: kind == .throwOut)
+    }
+
+    /// 聊天后单独调用:记一次聊天,并在稍后(不抢回复)择机冒一个里程碑。
+    func afterChat() {
+        afterInteraction(.chat, surface: false)
+        // 给聊天回复留出时间,再看看有没有里程碑要庆祝。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) { [weak self] in
+            guard let self else { return }
+            let progress = ProgressState.load()
+            let reached = Milestones.newlyReached(progress: progress, state: PetState.load())
+            guard let m = reached.first else { return }
+            var p = progress
+            for r in reached { p.markMilestoneReached(r.id) }
+            p.save()
+            self.celebrateMilestone(m)
+        }
+    }
+
+    private func celebrateMilestone(_ m: Milestone) {
+        lastSoftPromptAt = Date()
+        pet.bird.showBlush(true)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in self?.pet.bird.showBlush(false) }
+        if let move = m.move, MoveLibrary.shared.move(named: move) != nil {
+            pet.perform(action: move)
+        } else {
+            pet.bird.flapWings(times: 3)
+        }
+        pet.say(m.words)
+        EventBus.shared.post(kind: "milestone", summary: "里程碑:\(m.id) — \(m.words)", weight: 0)
+    }
+
+    private func maybeShowHint(progress: ProgressState, suppress: Bool) {
+        guard !suppress, !hintShownThisSession else { return }
+        guard Date().timeIntervalSince(lastSoftPromptAt) > 45 else { return }
+        guard !affect.isGrudging, !pet.isSleeping else { return }
+        guard let hint = Discovery.nextHint(progress) else { return }
+        hintShownThisSession = true
+        lastSoftPromptAt = Date()
+        var p = progress
+        p.markHintShown(hint.id)
+        p.save()
+        pet.bird.tiltHead(true)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) { [weak self] in self?.pet.bird.tiltHead(false) }
+        pet.say(hint.text)
+    }
+
+    func setVoiceConversationEnabled(_ enabled: Bool) {        if enabled {
             if !voice.enabled {
                 voice.enabled = true
             }
@@ -271,7 +405,7 @@ final class GuguApp: NSObject, NSApplicationDelegate {
         } else {
             listener.enabled = false
             voice.stop()
-            pet.say("好,我先不听了。")
+            pet.say(L.stopListening)
         }
     }
 
@@ -283,7 +417,7 @@ final class GuguApp: NSObject, NSApplicationDelegate {
             pet.bird.tiltHead(true)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in self?.pet.bird.tiltHead(false) }
         case .unavailable(let reason):
-            pet.say("麦克风现在用不了。\(reason)")
+            pet.say(L.micUnavailable + reason)
         default:
             break
         }

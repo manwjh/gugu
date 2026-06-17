@@ -7,6 +7,7 @@ import AppKit
 final class Voice: NSObject {
     private let synth = AVSpeechSynthesizer()
     private var chineseVoice: AVSpeechSynthesisVoice?
+    private var englishVoice: AVSpeechSynthesisVoice?
     var onWillSpeak: ((String) -> Void)?
 
     var enabled: Bool {
@@ -17,12 +18,46 @@ final class Voice: NSObject {
 
     override init() {
         super.init()
-        // 选一个中文嗓(优先高质量/增强版),没有就用系统默认
-        let voices = AVSpeechSynthesisVoice.speechVoices()
-        chineseVoice = voices.first { $0.language.hasPrefix("zh") && $0.quality == .premium }
-            ?? voices.first { $0.language.hasPrefix("zh") && $0.quality == .enhanced }
-            ?? voices.first { $0.language == "zh-CN" }
-            ?? voices.first { $0.language.hasPrefix("zh") }
+        // 在所有中文嗓里挑"最不机械"的一个(打分排序),没有高质量嗓时给出下载提示。
+        let all = AVSpeechSynthesisVoice.speechVoices()
+        chineseVoice = all.filter { $0.language.hasPrefix("zh") }
+            .max { Voice.naturalness($0, preferred: "zh-CN") < Voice.naturalness($1, preferred: "zh-CN") }
+        englishVoice = all.filter { $0.language.hasPrefix("en") }
+            .max { Voice.naturalness($0, preferred: "en-US") < Voice.naturalness($1, preferred: "en-US") }
+
+        if let v = chineseVoice {
+            Log.info("voice", "选用嗓音:\(v.name)(\(v.language)/\(Voice.qualityName(v.quality)))")
+            if v.quality == .default {
+                // 系统里没有增强版/高级版中文嗓,compact/eloquence 都偏机械。提示用户下载。
+                Log.info("voice", "未发现增强版中文嗓,声音偏机械。可在「系统设置→辅助功能→朗读内容→系统嗓音→管理嗓音」下载中文(中国)的增强版/高级版嗓音,咕咕会自动启用。")
+            }
+        } else {
+            Log.info("voice", "未找到任何中文嗓,将使用系统默认嗓。")
+        }
+        if let v = englishVoice {
+            Log.info("voice", "English voice: \(v.name) (\(v.language)/\(Voice.qualityName(v.quality)))")
+        }
+    }
+
+    /// 给嗓音打分,分高者更自然。核心:高质量(增强/高级)优先;Eloquence 引擎最机械,重罚;
+    /// 同等条件下偏好首选语言变体,并避开保真度最低的 super-compact。
+    static func naturalness(_ v: AVSpeechSynthesisVoice, preferred: String) -> Int {
+        var score = v.quality.rawValue * 1000   // default=1, enhanced=2, premium=3
+        let id = v.identifier
+        if id.contains("eloquence") { score -= 500 }       // DECtalk 风格,最生硬
+        if id.contains("super-compact") { score -= 50 }    // 保真度最低
+        let prefix = String(preferred.prefix(2))
+        if v.language == preferred { score += 100 }
+        else if v.language.hasPrefix(prefix) { score += 10 }
+        return score
+    }
+
+    private static func qualityName(_ q: AVSpeechSynthesisVoiceQuality) -> String {
+        switch q {
+        case .premium: return "高级版"
+        case .enhanced: return "增强版"
+        default: return "标准"
+        }
     }
 
     /// 说一句话。会先把括号里的舞台提示(如"歪头看了看你")去掉,只念真正说出口的字。
@@ -34,9 +69,11 @@ final class Voice: NSObject {
         if synth.isSpeaking { synth.stopSpeaking(at: .immediate) }
         onWillSpeak?(text)
         let style = VoiceStyle.forMood(mood)
+        // 按文本本身选嗓音:含中日韩字符走中文嗓,否则走英文嗓。
+        let voice = Voice.containsCJK(text) ? chineseVoice : (englishVoice ?? chineseVoice)
         for (index, sentence) in Voice.splitSentences(text).enumerated() {
             let u = AVSpeechUtterance(string: sentence)
-            u.voice = chineseVoice
+            u.voice = voice
             u.pitchMultiplier = style.pitch
             u.rate = AVSpeechUtteranceDefaultSpeechRate * style.rate
             u.volume = style.volume
@@ -47,6 +84,22 @@ final class Voice: NSObject {
     }
 
     func stop() { synth.stopSpeaking(at: .immediate) }
+
+    /// 文本里是否含中日韩字符——据此选中文嗓还是英文嗓。
+    static func containsCJK(_ s: String) -> Bool {
+        for scalar in s.unicodeScalars {
+            switch scalar.value {
+            case 0x4E00...0x9FFF,   // CJK Unified Ideographs
+                 0x3400...0x4DBF,   // CJK Extension A
+                 0x3040...0x30FF,   // Hiragana + Katakana
+                 0xAC00...0xD7AF:   // Hangul
+                return true
+            default:
+                continue
+            }
+        }
+        return false
+    }
 
     /// 去掉 (...)、（...）、*...* 这类舞台提示,只保留真正要念的话。
     static func stripStageDirections(_ s: String) -> String {
@@ -81,6 +134,22 @@ final class Voice: NSObject {
         let maxChars = 28
         if trimmed.count <= maxChars {
             pieces.append(trimmed)
+            return
+        }
+        // English: break on word boundaries so we don't cut words mid-syllable.
+        if !containsCJK(trimmed), trimmed.contains(" ") {
+            var line = ""
+            for word in trimmed.split(separator: " ") {
+                if line.isEmpty {
+                    line = String(word)
+                } else if line.count + 1 + word.count <= maxChars {
+                    line += " " + word
+                } else {
+                    pieces.append(line)
+                    line = String(word)
+                }
+            }
+            if !line.isEmpty { pieces.append(line) }
             return
         }
         var remaining = trimmed

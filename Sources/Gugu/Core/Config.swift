@@ -99,7 +99,6 @@ struct Config {
     var senseInputRhythm: Bool
     var blacklistApps: [String]
 
-    var toolWebSearch: Bool
     var toolNotes: Bool
     var toolReminders: Bool
     var toolLocalNotifications: Bool
@@ -107,6 +106,9 @@ struct Config {
     var dreamUseBatch: Bool
 
     var petName: String
+
+    /// UI language: "en" or "zh". Default "en".
+    var language: String
 
     static func load() -> Config {
         let text = (try? String(contentsOf: Paths.config, encoding: .utf8)) ?? ""
@@ -135,12 +137,12 @@ struct Config {
             senseScreen: y.bool("senses.screen", true),
             senseInputRhythm: y.bool("senses.input_rhythm", true),
             blacklistApps: y.list("senses.blacklist_apps"),
-            toolWebSearch: y.bool("tools.web_search", false),
             toolNotes: y.bool("tools.notes", false),
             toolReminders: y.bool("tools.reminders", false),
             toolLocalNotifications: y.bool("tools.local_notifications", false),
             dreamUseBatch: y.bool("dream.use_batch", false),
-            petName: y.str("pet.name", "咕咕")
+            petName: y.str("pet.name", "咕咕"),
+            language: y.str("pet.language", "en")
         )
     }
 
@@ -152,6 +154,7 @@ struct Config {
             # 咕咕 配置文件 —— 改完保存即生效(下次心跳)
             pet:
               name: 咕咕
+              language: en          # en or zh
 
             api:
               url: \(apiURL)
@@ -178,7 +181,6 @@ struct Config {
               blacklist_apps: [1Password, Keychain Access]
 
             tools:
-              web_search: false        # 高阶能力,必须经 proposals 批准
               notes: false             # 高阶能力,必须经 proposals 批准
               reminders: false         # 高阶能力,必须经 proposals 批准
               local_notifications: false # 系统通知,必须经 proposals 批准

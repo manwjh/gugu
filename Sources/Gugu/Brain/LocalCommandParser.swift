@@ -7,7 +7,6 @@ struct LocalCommand: Equatable {
     enum Kind: String {
         case note
         case reminder
-        case research
     }
 
     let kind: Kind
@@ -29,11 +28,6 @@ enum LocalCommandParser {
         if let content = extract(afterAnyOf: ["提醒我", "到时候提醒我", "帮我提醒"], in: trimmed),
            !content.isEmpty {
             return LocalCommand(kind: .reminder, content: contentWithoutDue(content), dueText: dueText(from: content), deferred: isDeferred(trimmed))
-        }
-
-        if let content = extract(afterAnyOf: ["研究一下", "帮我研究", "查一下", "帮我查", "查查"], in: trimmed),
-           !content.isEmpty {
-            return LocalCommand(kind: .research, content: content, dueText: nil, deferred: isDeferred(trimmed))
         }
 
         return nil
