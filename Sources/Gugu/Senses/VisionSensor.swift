@@ -128,7 +128,9 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
     private var lastPresenceChange = Date.distantPast
     private var gestureCandidate: VisionGesture?
     private var gestureCandidateCount = 0
-    private var lastOpenPalmCenter: CGPoint?
+    private var palmXHistory: [(t: Date, x: CGFloat)] = []   // 张掌时手心 x 轨迹,用于判挥手(来回摆)
+    private var expressionStreak: [VisionExpression: Int] = [:]  // 表情连续命中帧数(去抖,防打哈欠误判为笑)
+    private var faceMissingStreak = 0                          // 连续看不到脸的帧数(离开需连续多帧,防闪烁)
     private var lastObjectLabels: [String: Int] = [:]
     private let videoTracker = VideoUnderstandingTracker()
 
@@ -321,13 +323,29 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
     private func handle(face: FaceSignals, hand: HandSignals, objects: [VisionObjectObservation]) {
         let now = Date()
 
-        if face.present != facePresent, now.timeIntervalSince(lastPresenceChange) > 4 {
-            facePresent = face.present
-            lastPresenceChange = now
-            onPresence?(face.present)
+        // 出现/离开:出现要灵敏,离开要"连续看不到几帧"才算,避免单帧丢脸造成闪烁。
+        if face.present {
+            faceMissingStreak = 0
+            if !facePresent, now.timeIntervalSince(lastPresenceChange) > 4 {
+                facePresent = true
+                lastPresenceChange = now
+                onPresence?(true)
+            }
+        } else {
+            faceMissingStreak += 1
+            if facePresent, faceMissingStreak >= 5, now.timeIntervalSince(lastPresenceChange) > 4 {
+                facePresent = false
+                lastPresenceChange = now
+                onPresence?(false)
+            }
         }
 
-        for expression in face.expressions {
+        // 表情去抖:连续 3 帧都命中才算,单帧的"打哈欠像笑/说话像惊讶"会被滤掉。
+        let detected = Set(face.expressions)
+        for e in [VisionExpression.smile, .surprised, .sleepy] {
+            if detected.contains(e) { expressionStreak[e, default: 0] += 1 } else { expressionStreak[e] = 0 }
+        }
+        for expression in face.expressions where expressionStreak[expression, default: 0] >= 3 {
             guard now.timeIntervalSince(lastExpression[expression] ?? .distantPast) > 30 else { continue }
             lastExpression[expression] = now
             if expression == .smile { onSmile?() }
@@ -350,10 +368,12 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
 
     private func resetTransientVisionState() {
         facePresent = false
+        faceMissingStreak = 0
         lastPresenceChange = .distantPast
         gestureCandidate = nil
         gestureCandidateCount = 0
-        lastOpenPalmCenter = nil
+        palmXHistory.removeAll()
+        expressionStreak.removeAll()
         lastObjectLabels.removeAll()
         videoTracker.reset()
     }
@@ -362,17 +382,22 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         guard let gesture = hand.gesture else {
             gestureCandidate = nil
             gestureCandidateCount = 0
-            lastOpenPalmCenter = nil
+            palmXHistory.removeAll()
             return nil
         }
 
+        // 挥手:张掌时手心来回摆(≥2 次方向反转 + 一定幅度),而不是横移一下就算。
         if gesture == .openPalm, let center = hand.center {
-            defer { lastOpenPalmCenter = center }
-            if let lastOpenPalmCenter, abs(center.x - lastOpenPalmCenter.x) > 0.16 {
+            palmXHistory.append((now, center.x))
+            palmXHistory.removeAll { now.timeIntervalSince($0.t) > 1.2 }
+            if VisionSensor.isWaving(palmXHistory) {
                 gestureCandidate = nil
                 gestureCandidateCount = 0
+                palmXHistory.removeAll()
                 return .wave
             }
+        } else {
+            palmXHistory.removeAll()
         }
 
         if gestureCandidate == gesture {
@@ -381,7 +406,24 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
             gestureCandidate = gesture
             gestureCandidateCount = 1
         }
-        return gestureCandidateCount >= 2 ? gesture : nil
+        return gestureCandidateCount >= 3 ? gesture : nil   // 3 帧确认,更稳
+    }
+
+    /// 手心 x 轨迹是否构成"挥手":来回摆动至少 2 次,且横向幅度够大。
+    nonisolated private static func isWaving(_ history: [(t: Date, x: CGFloat)]) -> Bool {
+        guard history.count >= 4 else { return false }
+        let xs = history.map(\.x)
+        guard let mn = xs.min(), let mx = xs.max(), mx - mn > 0.12 else { return false }
+        var reversals = 0
+        var lastSign = 0
+        for i in 1..<xs.count {
+            let d = xs[i] - xs[i - 1]
+            if abs(d) < 0.01 { continue }
+            let s = d > 0 ? 1 : -1
+            if lastSign != 0, s != lastSign { reversals += 1 }
+            lastSign = s
+        }
+        return reversals >= 2
     }
 
     private func stableObjects(from objects: [VisionObjectObservation], now: Date) -> [VisionObjectObservation] {
@@ -421,7 +463,10 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         let landmarks = face.landmarks
         if let mouth = landmarks?.outerLips,
            let metrics = landmarkMetrics(mouth.normalizedPoints) {
-            if metrics.height > 0, metrics.width / metrics.height > 3.2 {
+            // 笑:嘴够宽 + 嘴角上扬(左右嘴角高于唇竖直中线),避免打哈欠/张嘴说话被当成笑。
+            if metrics.height > 0,
+               metrics.width / metrics.height > 2.8,
+               mouthCornersRaised(mouth.normalizedPoints) {
                 expressions.append(.smile)
             } else if metrics.width > 0, metrics.height / metrics.width > 0.34 {
                 expressions.append(.surprised)
@@ -449,6 +494,17 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
               let minY = points.map(\.y).min(),
               let maxY = points.map(\.y).max() else { return nil }
         return (maxX - minX, maxY - minY)
+    }
+
+    /// 嘴角是否上扬:左右最外侧点(嘴角)的平均高度 ≥ 唇竖直中线(Vision 归一化 y 向上)。
+    /// 微笑会把嘴角拉高;打哈欠/平张嘴时嘴角在中线附近或更低,可据此排除。
+    nonisolated private static func mouthCornersRaised(_ points: [CGPoint]) -> Bool {
+        guard let left = points.min(by: { $0.x < $1.x }),
+              let right = points.max(by: { $0.x < $1.x }),
+              let minY = points.map(\.y).min(),
+              let maxY = points.map(\.y).max() else { return false }
+        let midY = (minY + maxY) / 2
+        return (left.y + right.y) / 2 >= midY
     }
 
     nonisolated private static func handSignals(from observations: [VNHumanHandPoseObservation]) -> HandSignals {

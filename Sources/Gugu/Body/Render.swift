@@ -45,6 +45,8 @@ func runRender(pose: String, to path: String) {
         bird.setViewDirection(.front, animated: false)
     }
 
+    if pose == "manpu" { bird.debugPlaceAllManpu() }   // TEMP-DEBUG
+
 
     let view = SKView(frame: CGRect(origin: .zero, size: size))
     view.allowsTransparency = false

@@ -12,6 +12,9 @@ enum Manpu {
     case anger      // 青筋(💢):生气 / 不爽
     case surprise   // 惊叹号:吃惊 / 被戳一跳
     case love       // 心:开心 / 被宠
+    case music      // 音符:哼唱 / 跳舞 / 高兴
+    case question   // 问号:困惑 / 好奇
+    case dizzy      // 螺旋:被戳晕 / 眩晕
 
     /// 头顶/脸颊侧的默认锚点(BirdNode 本地坐标,和 zzz 同区域)。
     var defaultAnchor: CGPoint {
@@ -20,6 +23,9 @@ enum Manpu {
         case .anger:    return CGPoint(x: 16, y: 44)
         case .surprise: return CGPoint(x: 14, y: 46)
         case .love:     return CGPoint(x: 12, y: 42)
+        case .music:    return CGPoint(x: 16, y: 44)
+        case .question: return CGPoint(x: 15, y: 46)
+        case .dizzy:    return CGPoint(x: 4, y: 48)     // 头顶正上方转圈
         }
     }
 
@@ -28,6 +34,8 @@ enum Manpu {
         switch self {
         case .surprise: return 0.12
         case .love:     return -0.1
+        case .music:    return 0.1
+        case .question: return 0.08
         default:        return 0
         }
     }
@@ -861,6 +869,21 @@ final class BirdNode: SKNode {
 
     // MARK: - 漫符 (manpu) 情绪符号
 
+    /// TEMP-DEBUG: 静态摆放全部漫符用于离屏渲染验证(验证后删除)。
+    func debugPlaceAllManpu() {
+        let layout: [(Manpu, CGPoint)] = [
+            (.sweat, CGPoint(x: -36, y: 40)), (.anger, CGPoint(x: -24, y: 44)),
+            (.surprise, CGPoint(x: -12, y: 44)), (.love, CGPoint(x: 0, y: 42)),
+            (.music, CGPoint(x: 12, y: 44)), (.question, CGPoint(x: 26, y: 44)),
+            (.dizzy, CGPoint(x: 40, y: 44)),
+        ]
+        for (kind, pos) in layout {
+            let n = makeManpuNode(kind)
+            n.position = pos
+            manpu.addChild(n)
+        }
+    }
+
     /// 在头顶弹出一个情绪符号,播放「弹入 → 行为 → 淡出」后自动移除。
     /// 与身体动画解耦,可与 showBlush / 动作叠加。
     func showManpu(_ kind: Manpu, at anchor: CGPoint? = nil) {
@@ -893,12 +916,40 @@ final class BirdNode: SKNode {
         case .anger:
             let pulse = SKAction.sequence([.scale(to: 1.25, duration: 0.12), .scale(to: 1.0, duration: 0.12)])
             behavior = .sequence([.repeat(pulse, count: 2), .wait(forDuration: 0.1)])
+        case .music:
+            // 音符:边上飘边左右摇摆(像随节奏晃)
+            let sway = SKAction.sequence([
+                .rotate(toAngle: kind.tilt + 0.18, duration: 0.3),
+                .rotate(toAngle: kind.tilt - 0.18, duration: 0.3),
+                .rotate(toAngle: kind.tilt, duration: 0.2),
+            ])
+            behavior = .group([.moveBy(x: 6, y: 18, duration: 0.9), sway])
+        case .question:
+            // 问号:歪头式上下点一下,停留稍久(困惑感)
+            behavior = .sequence([
+                .moveBy(x: 0, y: 3, duration: 0.12),
+                .moveBy(x: 0, y: -3, duration: 0.14),
+                .wait(forDuration: 0.6),
+            ])
+        case .dizzy:
+            // 螺旋:原地转圈再消失
+            behavior = .sequence([.repeat(.rotate(byAngle: .pi * 2, duration: 0.7), count: 2)])
         }
 
         node.run(.sequence([popIn, behavior, .fadeOut(withDuration: 0.3), .removeFromParent()]))
     }
 
-    private func makeManpuNode(_ kind: Manpu) -> SKShapeNode {
+    private func makeManpuNode(_ kind: Manpu) -> SKNode {
+        switch kind {
+        case .question:  return makeQuestionNode()
+        case .dizzy:     return makeSpiralNode(maxR: 7, turns: 2.0,
+                                               color: NSColor(calibratedRed: 0.45, green: 0.4, blue: 0.7, alpha: 0.95),
+                                               lineWidth: 1.6)
+        default:         return makeShapeManpu(kind)
+        }
+    }
+
+    private func makeShapeManpu(_ kind: Manpu) -> SKShapeNode {
         let node = SKShapeNode()
         node.lineJoin = .round
         switch kind {
@@ -921,7 +972,41 @@ final class BirdNode: SKNode {
             node.fillColor = NSColor(calibratedRed: 1.0, green: 0.42, blue: 0.56, alpha: 0.95)
             node.strokeColor = NSColor(calibratedWhite: 1, alpha: 0.5)
             node.lineWidth = 0.8
+        case .music:
+            node.path = musicNotePath()
+            node.fillColor = NSColor(calibratedRed: 0.42, green: 0.45, blue: 0.78, alpha: 0.95)
+            node.strokeColor = .clear
+        case .question, .dizzy:
+            break // 由 makeManpuNode 单独构造
         }
+        return node
+    }
+
+    /// 问号:描边的钩子曲线 + 一个实心圆点(两者分开,故用容器节点)。
+    private func makeQuestionNode() -> SKNode {
+        let color = NSColor(calibratedRed: 0.35, green: 0.55, blue: 0.85, alpha: 1)
+        let node = SKNode()
+        let hook = SKShapeNode(path: questionHookPath())
+        hook.fillColor = .clear
+        hook.strokeColor = color
+        hook.lineWidth = 1.8
+        hook.lineCap = .round
+        node.addChild(hook)
+        let dot = SKShapeNode(circleOfRadius: 1.25)
+        dot.fillColor = color
+        dot.strokeColor = .clear
+        dot.position = CGPoint(x: 0.4, y: -4)
+        node.addChild(dot)
+        return node
+    }
+
+    /// 螺旋:阿基米德螺线的描边,用于眩晕符号与晕眼。
+    private func makeSpiralNode(maxR: CGFloat, turns: CGFloat, color: NSColor, lineWidth: CGFloat) -> SKShapeNode {
+        let node = SKShapeNode(path: spiralPath(maxR: maxR, turns: turns))
+        node.fillColor = .clear
+        node.strokeColor = color
+        node.lineWidth = lineWidth
+        node.lineCap = .round
         return node
     }
 
@@ -970,5 +1055,56 @@ final class BirdNode: SKNode {
         p.closeSubpath()
         p.addEllipse(in: CGRect(x: -1.4, y: -3, width: 2.8, height: 2.8))   // 圆点
         return p
+    }
+
+    /// 八分音符:符头(斜椭圆)+ 符干 + 符尾旗。
+    private func musicNotePath() -> CGPath {
+        let p = CGMutablePath()
+        p.addEllipse(in: CGRect(x: -4, y: -5.5, width: 6, height: 4.6))     // 符头
+        p.addRect(CGRect(x: 0.6, y: -3.6, width: 1.5, height: 12))          // 符干
+        p.move(to: CGPoint(x: 2.1, y: 8.4))                                 // 符尾旗
+        p.addQuadCurve(to: CGPoint(x: 5.4, y: 2.6), control: CGPoint(x: 6.2, y: 6.4))
+        p.addQuadCurve(to: CGPoint(x: 2.1, y: 4.8), control: CGPoint(x: 4, y: 4.4))
+        p.closeSubpath()
+        return p
+    }
+
+    /// 问号上半钩(描边用,开放路径)。
+    private func questionHookPath() -> CGPath {
+        let p = CGMutablePath()
+        p.move(to: CGPoint(x: -3.2, y: 4.6))
+        p.addQuadCurve(to: CGPoint(x: 0.2, y: 8.6), control: CGPoint(x: -3.4, y: 8.8))   // 上行到顶
+        p.addQuadCurve(to: CGPoint(x: 1.4, y: 3.0), control: CGPoint(x: 4.4, y: 7.0))    // 越顶向右下
+        p.addQuadCurve(to: CGPoint(x: 0.4, y: -0.8), control: CGPoint(x: -0.8, y: 1.6))  // 收进中线落到点上方
+        return p
+    }
+
+    /// 阿基米德螺线(从中心向外),用于眩晕。
+    private func spiralPath(maxR: CGFloat, turns: CGFloat) -> CGPath {
+        let p = CGMutablePath()
+        let steps = 48
+        p.move(to: .zero)
+        for i in 1...steps {
+            let t = CGFloat(i) / CGFloat(steps)
+            let a = t * turns * 2 * .pi
+            let r = t * maxR
+            p.addLine(to: CGPoint(x: cos(a) * r, y: sin(a) * r))
+        }
+        return p
+    }
+
+    /// 晕眼:在可见的眼睛上叠一个旋转的小螺旋(被戳晕时),`on=false` 移除。
+    func dizzyEyes(_ on: Bool) {
+        for eye in [eyeL, eyeR] {
+            eye.childNode(withName: "dizzy")?.removeFromParent()
+            guard on else { continue }
+            let s = makeSpiralNode(maxR: 3.0, turns: 1.7,
+                                   color: NSColor(calibratedWhite: 0.96, alpha: 0.95),
+                                   lineWidth: 0.8)
+            s.name = "dizzy"
+            s.zPosition = 3
+            eye.addChild(s)
+            s.run(.repeatForever(.rotate(byAngle: .pi * 2, duration: 0.8)), withKey: "spin")
+        }
     }
 }
