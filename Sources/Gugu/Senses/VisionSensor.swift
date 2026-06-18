@@ -89,6 +89,14 @@ enum VideoUnderstandingEvent: String {
     }
 }
 
+/// 用户主动开启摄像头时的真实结果(用于给出正确反馈,而非假装成功)。
+enum VisionStartOutcome {
+    case started     // 已授权且会话起来了
+    case denied      // 系统权限被拒/受限
+    case noDevice    // 找不到摄像头
+    case failed      // 会话配置失败
+}
+
 /// Optional camera sense. PRIVACY: frames are analyzed locally and discarded
 /// immediately — only boolean events ("主人回来了" / "主人在笑") ever leave this
 /// class. No image is stored, uploaded, or shown. Default OFF; toggled by owner.
@@ -149,12 +157,36 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         }
     }
 
-    private func configureAndStart() {
+    /// 用户主动点"睁眼"时的入口:开启并把**真实结果**回调出去——
+    /// 授权通过且会话起来了才报 .started,被拒报 .denied,没设备报 .noDevice。
+    /// 这样菜单就不会在权限被拒时还假装"睁开眼睛看了看你"。
+    func requestEnable(_ completion: @escaping (VisionStartOutcome) -> Void) {
+        UserDefaults.standard.set(true, forKey: "gugu.camera.enabled")
+        guard !running else { completion(.started); return }
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            configureAndStart(announce: completion)
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
+                Task { @MainActor in
+                    guard let self else { return }
+                    guard granted else { completion(.denied); return }
+                    guard self.enabled else { return }
+                    self.configureAndStart(announce: completion)
+                }
+            }
+        default:   // .denied / .restricted
+            completion(.denied)
+        }
+    }
+
+    private func configureAndStart(announce: ((VisionStartOutcome) -> Void)? = nil) {
         guard enabled, !running else { return }
         guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front)
                 ?? AVCaptureDevice.default(for: .video),
               let input = try? AVCaptureDeviceInput(device: device) else {
             Log.info("vision", "没有可用摄像头")
+            announce?(.noDevice)
             return
         }
         let output = AVCaptureVideoDataOutput()
@@ -196,12 +228,14 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
                         self.available = false
                     }
                     Log.info("vision", "摄像头会话配置失败")
+                    announce?(.failed)
                     return
                 }
                 guard self.enabled, self.frameGate.accepts(generation) else { return }
                 self.running = true
                 self.available = true
                 Log.info("vision", "咕咕睁开了眼睛(只在本机看,看完即忘)")
+                announce?(.started)
             }
         }
     }

@@ -314,12 +314,26 @@ final class Console: NSObject, NSWindowDelegate {
 
     @objc func toggleCamera() {
         guard let app else { return }
-        let newVal = !app.visionSensor.enabled
-        app.visionSensor.enabled = newVal
-        if newVal {
-            app.pet.say(L.cameraOpened)
-        } else {
+        if app.visionSensor.enabled {
+            app.visionSensor.enabled = false
             app.pet.say(L.cameraClosed)
+            refreshMenu()
+            return
+        }
+        // 开启:等真实结果再反馈,别在权限被拒时还假装睁眼了。
+        app.visionSensor.requestEnable { [weak self] outcome in
+            guard let app = self?.app else { return }
+            switch outcome {
+            case .started:
+                app.pet.say(L.cameraOpened)
+            case .denied:
+                app.visionSensor.enabled = false   // 没真开起来,菜单别显示"已开"
+                app.pet.say(L.cameraDenied)
+            case .noDevice, .failed:
+                app.visionSensor.enabled = false
+                app.pet.say(L.cameraNoDevice)
+            }
+            self?.refreshMenu()
         }
         refreshMenu()
     }

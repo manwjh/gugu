@@ -153,6 +153,9 @@ enum L {
     static var stopListening: String { s("好,我先不听了。", "Okay, I'll stop listening.") }
     static var cameraOpened: String { s("(咕咕睁开眼睛看了看你)", "(Gugu opens eyes and looks at you)") }
     static var cameraClosed: String { s("(咕咕闭上了眼睛)", "(Gugu closes eyes)") }
+    static var cameraDenied: String { s("咕咕想睁眼,但系统没给摄像头权限。到「系统设置 → 隐私与安全 → 摄像头」里把咕咕勾上吧~",
+                                        "I tried to open my eyes but macOS hasn't granted camera access. Enable Gugu in System Settings → Privacy & Security → Camera.") }
+    static var cameraNoDevice: String { s("(咕咕眨眨眼,没找到摄像头)", "(Gugu blinks — no camera found)") }
     static var dreamEnter: String { s("(进入梦乡…)", "(Drifting off to dream…)") }
     static var dreamFailed: String { s("梦没做成。", "Dream didn't work out.") }
     static func dreamProposal(_ title: String) -> String {

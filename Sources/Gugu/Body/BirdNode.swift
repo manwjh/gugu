@@ -6,6 +6,33 @@ enum BirdViewDirection: Equatable {
     case side
 }
 
+/// 漫符(manpu):漫画式情绪符号,在头顶临时弹出表达情绪。纯矢量绘制以贴合手绘画风。
+enum Manpu {
+    case sweat      // 汗滴:尴尬 / 疲惫 / 无奈
+    case anger      // 青筋(💢):生气 / 不爽
+    case surprise   // 惊叹号:吃惊 / 被戳一跳
+    case love       // 心:开心 / 被宠
+
+    /// 头顶/脸颊侧的默认锚点(BirdNode 本地坐标,和 zzz 同区域)。
+    var defaultAnchor: CGPoint {
+        switch self {
+        case .sweat:    return CGPoint(x: 15, y: 30)   // 脸颊侧滑落
+        case .anger:    return CGPoint(x: 16, y: 44)
+        case .surprise: return CGPoint(x: 14, y: 46)
+        case .love:     return CGPoint(x: 12, y: 42)
+        }
+    }
+
+    /// 入场时的轻微倾斜,让符号更活泼。
+    var tilt: CGFloat {
+        switch self {
+        case .surprise: return 0.12
+        case .love:     return -0.1
+        default:        return 0
+        }
+    }
+}
+
 struct BirdAppearanceDebug {
     let direction: BirdViewDirection
     let visibleEyes: Int
@@ -35,6 +62,8 @@ final class BirdNode: SKNode {
     let blushL = SKShapeNode(circleOfRadius: 3)
     let blushR = SKShapeNode(circleOfRadius: 3)
     let zzz = SKLabelNode(text: "z")
+    /// 漫符层:情绪符号(汗滴/青筋/惊叹/心)的临时覆盖,与身体解耦。
+    let manpu = SKNode()
     private let crest = SKShapeNode()
     private let backPatch = SKShapeNode()
     private let backStripe = SKShapeNode()
@@ -211,6 +240,10 @@ final class BirdNode: SKNode {
         zzz.alpha = 0
         zzz.zPosition = 5
         addChild(zzz)
+
+        // 漫符层:在最上层,符号即时生成又即时移除,不预建。
+        manpu.zPosition = 6
+        addChild(manpu)
 
         aura.fillColor = .clear
         aura.strokeColor = NSColor.systemTeal.withAlphaComponent(0.28)
@@ -824,5 +857,133 @@ final class BirdNode: SKNode {
             .fadeOut(withDuration: 0.4),
             .run { [weak self] in self?.zzz.position = CGPoint(x: 18, y: 38) },
         ]))
+    }
+
+    // MARK: - 漫符 (manpu) 情绪符号
+
+    /// 在头顶弹出一个情绪符号,播放「弹入 → 行为 → 淡出」后自动移除。
+    /// 与身体动画解耦,可与 showBlush / 动作叠加。
+    func showManpu(_ kind: Manpu, at anchor: CGPoint? = nil) {
+        let node = makeManpuNode(kind)
+        node.position = anchor ?? kind.defaultAnchor
+        node.zRotation = kind.tilt
+        node.alpha = 0
+        node.setScale(0.1)
+        manpu.addChild(node)
+
+        // 入场:带一点过冲的弹出。
+        let popIn = SKAction.group([
+            .sequence([.scale(to: 1.2, duration: 0.13), .scale(to: 1.0, duration: 0.07)]),
+            .fadeIn(withDuration: 0.12),
+        ])
+
+        // 保持阶段:每种符号有自己的小动作。
+        let behavior: SKAction
+        switch kind {
+        case .love:
+            behavior = .group([.moveBy(x: 2, y: 16, duration: 1.0), .scale(to: 1.1, duration: 1.0)])
+        case .sweat:
+            behavior = .sequence([.wait(forDuration: 0.1), .moveBy(x: 1.5, y: -6, duration: 0.5)])
+        case .surprise:
+            behavior = .sequence([
+                .moveBy(x: 0, y: 4, duration: 0.08),
+                .moveBy(x: 0, y: -4, duration: 0.1),
+                .wait(forDuration: 0.4),
+            ])
+        case .anger:
+            let pulse = SKAction.sequence([.scale(to: 1.25, duration: 0.12), .scale(to: 1.0, duration: 0.12)])
+            behavior = .sequence([.repeat(pulse, count: 2), .wait(forDuration: 0.1)])
+        }
+
+        node.run(.sequence([popIn, behavior, .fadeOut(withDuration: 0.3), .removeFromParent()]))
+    }
+
+    /// TEMP-DEBUG: 静态摆放四个漫符用于离屏渲染验证(验证后删除)。
+    func debugPlaceAllManpu() {
+        let layout: [(Manpu, CGPoint)] = [
+            (.sweat, CGPoint(x: -22, y: 40)),
+            (.anger, CGPoint(x: -7, y: 44)),
+            (.surprise, CGPoint(x: 7, y: 44)),
+            (.love, CGPoint(x: 22, y: 42)),
+        ]
+        for (kind, pos) in layout {
+            let n = makeManpuNode(kind)
+            n.position = pos
+            manpu.addChild(n)
+        }
+    }
+
+    private func makeManpuNode(_ kind: Manpu) -> SKShapeNode {
+        let node = SKShapeNode()
+        node.lineJoin = .round
+        switch kind {
+        case .sweat:
+            node.path = sweatPath()
+            node.fillColor = NSColor(calibratedRed: 0.55, green: 0.78, blue: 0.96, alpha: 0.9)
+            node.strokeColor = NSColor(calibratedRed: 0.3, green: 0.55, blue: 0.85, alpha: 0.55)
+            node.lineWidth = 0.8
+        case .anger:
+            node.path = angerPath()
+            node.fillColor = NSColor(calibratedRed: 0.88, green: 0.18, blue: 0.2, alpha: 0.95)
+            node.strokeColor = NSColor(calibratedRed: 0.6, green: 0.1, blue: 0.12, alpha: 0.75)
+            node.lineWidth = 0.8
+        case .surprise:
+            node.path = exclamationPath()
+            node.fillColor = NSColor(calibratedRed: 0.96, green: 0.36, blue: 0.18, alpha: 1)
+            node.strokeColor = .clear
+        case .love:
+            node.path = heartPath()
+            node.fillColor = NSColor(calibratedRed: 1.0, green: 0.42, blue: 0.56, alpha: 0.95)
+            node.strokeColor = NSColor(calibratedWhite: 1, alpha: 0.5)
+            node.lineWidth = 0.8
+        }
+        return node
+    }
+
+    private func heartPath() -> CGPath {
+        let p = CGMutablePath()
+        p.move(to: CGPoint(x: 0, y: -5))
+        p.addCurve(to: CGPoint(x: -6, y: 2.5),
+                   control1: CGPoint(x: -3.2, y: -2), control2: CGPoint(x: -6, y: -1))
+        p.addArc(center: CGPoint(x: -3, y: 3.2), radius: 3.1, startAngle: .pi, endAngle: 0, clockwise: false)
+        p.addArc(center: CGPoint(x: 3, y: 3.2), radius: 3.1, startAngle: .pi, endAngle: 0, clockwise: false)
+        p.addCurve(to: CGPoint(x: 0, y: -5),
+                   control1: CGPoint(x: 6, y: -1), control2: CGPoint(x: 3.2, y: -2))
+        p.closeSubpath()
+        return p
+    }
+
+    private func sweatPath() -> CGPath {
+        let p = CGMutablePath()
+        p.move(to: CGPoint(x: 0, y: 7))                                            // 顶尖
+        p.addQuadCurve(to: CGPoint(x: 4, y: -1), control: CGPoint(x: 4, y: 3.5))
+        p.addArc(center: CGPoint(x: 0, y: -1), radius: 4, startAngle: 0, endAngle: .pi, clockwise: true)  // 底部圆鼓
+        p.addQuadCurve(to: CGPoint(x: 0, y: 7), control: CGPoint(x: -4, y: 3.5))
+        p.closeSubpath()
+        return p
+    }
+
+    /// 青筋(💢):四角向内收的尖角方块。
+    private func angerPath() -> CGPath {
+        let p = CGMutablePath()
+        let r: CGFloat = 6, i: CGFloat = 1.6
+        p.move(to: CGPoint(x: r, y: r))
+        p.addQuadCurve(to: CGPoint(x: -r, y: r), control: CGPoint(x: 0, y: i))
+        p.addQuadCurve(to: CGPoint(x: -r, y: -r), control: CGPoint(x: -i, y: 0))
+        p.addQuadCurve(to: CGPoint(x: r, y: -r), control: CGPoint(x: 0, y: -i))
+        p.addQuadCurve(to: CGPoint(x: r, y: r), control: CGPoint(x: i, y: 0))
+        p.closeSubpath()
+        return p
+    }
+
+    private func exclamationPath() -> CGPath {
+        let p = CGMutablePath()
+        p.move(to: CGPoint(x: -1.7, y: 7))      // 竖条:上宽下窄
+        p.addLine(to: CGPoint(x: 1.7, y: 7))
+        p.addLine(to: CGPoint(x: 0.9, y: 1.2))
+        p.addLine(to: CGPoint(x: -0.9, y: 1.2))
+        p.closeSubpath()
+        p.addEllipse(in: CGRect(x: -1.4, y: -3, width: 2.8, height: 2.8))   // 圆点
+        return p
     }
 }

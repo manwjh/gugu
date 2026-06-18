@@ -346,7 +346,7 @@ final class PetController: NSObject {
             bird.yScale = 0.7
             bird.run(.scaleY(to: 1.0, duration: 0.3))
             // only an owner drag-throw counts as "thrown"; a perch-fall does not
-            if fallFromDrag { onThrown?() }
+            if fallFromDrag { bird.showManpu(.anger); onThrown?() }
             transition(to: .idle)
         } else {
             bird.yScale = 0.85
@@ -1254,6 +1254,7 @@ final class PetController: NSObject {
         let reaction = PokeCombo.reaction(for: combo)
         switch reaction {
         case .mild:
+            bird.showManpu(.surprise)
             bird.peckOnce()
             bird.run(.sequence([
                 .moveBy(x: 0, y: 10, duration: 0.1),
@@ -1261,6 +1262,7 @@ final class PetController: NSObject {
             ]))
         case .annoyed:
             // 有点烦:扭头 + 小幅后仰
+            bird.showManpu(.anger)
             setFacing(right: !facingRight)
             bird.tiltHead(true)
             bird.run(.sequence([
@@ -1270,6 +1272,7 @@ final class PetController: NSObject {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in self?.bird.tiltHead(false) }
         case .dizzy:
             // 被戳晕:左右摇晃几下
+            bird.showManpu(.surprise)
             bird.run(.sequence([
                 .rotate(toAngle: 0.18, duration: 0.1),
                 .rotate(toAngle: -0.18, duration: 0.1),
@@ -1278,6 +1281,7 @@ final class PetController: NSObject {
             ]))
         case .flee:
             // 受不了,躲到一边
+            bird.showManpu(.sweat)
             perform(action: "retreat")
         }
         if let words = reaction.speech, state != .sleep {
@@ -1290,6 +1294,7 @@ final class PetController: NSObject {
         if state == .sleep { wake() }
         bird.setViewDirection(.front)
         bird.showBlush(true)
+        bird.showManpu(.love)
         bird.tiltHead(true)
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
             self?.bird.showBlush(false)

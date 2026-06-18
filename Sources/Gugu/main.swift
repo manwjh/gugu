@@ -196,6 +196,7 @@ final class GuguApp: NSObject, NSApplicationDelegate {
             guard let self else { return }
             self.affect.petted()  // a smile warms the bird like a pat
             self.pet.bird.showBlush(true)
+            self.pet.bird.showManpu(.love)
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in self?.pet.bird.showBlush(false) }
             EventBus.shared.post(kind: "see_smile", summary: L.eventSeeSmile, weight: 18)
         }
@@ -453,6 +454,11 @@ final class GuguApp: NSObject, NSApplicationDelegate {
             Task { @MainActor in
                 guard let self else { return }
                 self.affect.tickMinute()
+                // 疲惫时偶尔冒一颗汗滴(醒着、有人在看才显,避免空播)
+                if !self.pet.isSleeping && self.affect.energy < 0.3
+                    && self.rhythmSensor.rhythm != .away && Double.random(in: 0...1) < 0.3 {
+                    self.pet.bird.showManpu(.sweat)
+                }
                 // night sleep: pet sleeps during sleepy hours regardless of budget
                 if self.affect.isSleepyTime && !self.pet.isSleeping {
                     self.pet.sleep()
