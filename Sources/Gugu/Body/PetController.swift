@@ -134,6 +134,8 @@ final class PetController: NSObject {
     var idleMoodProvider: (() -> (energy: Double, valence: Double))?
     /// idle 时偶尔"自己玩"的一个动作名(由 app 注入,通常随机挑一个已学会/内置动作)。
     var idlePlayMoveProvider: (() -> String?)?
+    /// idle 时偶尔自发流露的情绪符号(由 app 注入,读 Affect;大多返回 nil 以免刷屏)。
+    var idleManpuProvider: (() -> Manpu?)?
 
     private let winSize = CGSize(width: 150, height: 150)
     /// Bird's feet y-offset inside the scene.
@@ -621,11 +623,24 @@ final class PetController: NSObject {
             stateUntil = Date().addingTimeInterval(1.6)
         case .hop:
             perform(action: "hop")
+        case .hum:
+            // 哼唱:轻轻左右摇 + 飘个音符
+            bird.setViewDirection(.front)
+            bird.run(.sequence([
+                .rotate(toAngle: 0.08, duration: 0.3),
+                .rotate(toAngle: -0.08, duration: 0.3),
+                .rotate(toAngle: 0, duration: 0.2),
+            ]))
+            bird.showManpu(.music)
+            stateUntil = Date().addingTimeInterval(1.0)
         case .playMove(let name):
             perform(action: name)
         case .standStill:
             break // just stand there, being a bird
         }
+
+        // 行为之外,偶尔自发流露一下当下心情(开心冒心/哼唱、累了冒汗、还在气头上冒青筋)。
+        if let m = idleManpuProvider?() { bird.showManpu(m) }
     }
 
     private func perchedMicroBehavior() {
@@ -714,6 +729,7 @@ final class PetController: NSObject {
             let mouse = NSEvent.mouseLocation
             setFacing(right: mouse.x > window.frame.midX)
             bird.tiltHead(true)
+            bird.showManpu(.question)
             stateUntil = Date().addingTimeInterval(4)
             DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in self?.bird.tiltHead(false) }
         case "peck":

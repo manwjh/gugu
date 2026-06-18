@@ -654,6 +654,8 @@ final class BirdNode: SKNode {
         run(.repeat(rise, count: 2), withKey: "evolve")
         flapWings(times: 12, fast: true)
         showBlush(true)
+        showManpu(.music)
+        showManpu(.love, at: CGPoint(x: -14, y: 44))
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) { [weak self] in
             self?.showBlush(false)
         }

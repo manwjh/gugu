@@ -164,6 +164,18 @@ final class GuguApp: NSObject, NSApplicationDelegate {
         pet.idlePlayMoveProvider = {
             MoveLibrary.shared.moves.randomElement()?.name
         }
+        // idle 自发情绪流露:大多沉默,偶尔按当下 affect 冒一个漫符,让心情"看得见"。
+        pet.idleManpuProvider = { [weak self] in
+            guard let self else { return nil }
+            let roll = Double.random(in: 0...1)
+            if roll > 0.12 { return nil }                       // ~12% 才流露,避免刷屏
+            if self.affect.isGrudging { return .anger }         // 还在气头上
+            if self.affect.energy < 0.3 { return .sweat }       // 累了
+            if self.affect.valence > 0.45 {                     // 心情很好:哼唱或冒心
+                return roll < 0.05 ? .music : .love
+            }
+            return nil
+        }
 
         // rhythm transitions wake/greet behavior
         rhythmSensor.onRhythmChange = { [weak self] old, new in
@@ -226,7 +238,8 @@ final class GuguApp: NSObject, NSApplicationDelegate {
             }
             EventBus.shared.post(kind: gesture.eventKind, summary: gesture.summary, weight: 16)
         }
-        visionSensor.onObject = { object in
+        visionSensor.onObject = { [weak self] object in
+            self?.pet.bird.showManpu(.question)   // 看到没见过的东西:好奇
             EventBus.shared.post(kind: "object_seen", summary: object.summary, weight: 6)
         }
         visionSensor.onVideoEvent = { [weak self] event, label in
@@ -316,6 +329,7 @@ final class GuguApp: NSObject, NSApplicationDelegate {
                 let draft = try await self.brain.learnMove(intent: intent)
                 guard draft.feasible, !draft.move.steps.isEmpty else {
                     Log.info("learn_move", "放弃:feasible=\(draft.feasible) steps=\(draft.move.steps.count)")
+                    self.pet.bird.showManpu(.question)   // 没整明白怎么做:困惑
                     self.pet.say(L.learnCantDo)
                     return
                 }

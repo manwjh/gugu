@@ -16,6 +16,7 @@ enum IdleBehavior: Equatable {
     case stretch        // 伸懒腰(新)
     case lookAround     // 东张西望(新)
     case hop            // 原地蹦一下(新)
+    case hum            // 心情好时自己哼两句,飘个音符(新)
     case playMove(String) // 自己演一个学会/内置的动作(新)
     case standStill     // 就站着,当一只鸟
 }
@@ -42,6 +43,10 @@ enum IdleSelector {
         let lively = energy > 0.6 && valence > 0.2
         if lively, let move = availableMove, roll < 0.14 {
             return .playMove(move)
+        }
+        // 心情很好时,偶尔自己哼两句(roll 0.14–0.20,不与上面的 playMove 判定区间重叠)。
+        if lively && valence > 0.4 && roll >= 0.14 && roll < 0.20 {
+            return .hum
         }
 
         switch roll {
