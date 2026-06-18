@@ -43,24 +43,19 @@ enum Paths {
         if !fm.fileExists(atPath: pinnedMemory.deletingLastPathComponent().path) {
             try fm.createDirectory(at: pinnedMemory.deletingLastPathComponent(), withIntermediateDirectories: true)
         }
-        // Guide the owner on the optional local object-recognition model.
+        // 说明:物品识别现在用系统内置能力,无需安装模型。
         let modelsReadme = modelsDir.appendingPathComponent("README.txt")
-        if !fm.fileExists(atPath: modelsReadme.path) {
-            let text = """
-            本地视觉模型目录(可选)
+        let readmeText = """
+        本地视觉目录
 
-            物品识别是可选能力,默认不启用,不影响咕咕其它功能。
-            想让咕咕"好像看见"杯子、手机等物品,把一个编译好的 Core ML
-            模型放到这里,文件名必须是:
+        物品识别现在用 macOS 系统内置能力(无需任何模型文件):
+        开启菜单栏的摄像头并通过系统授权后,咕咕就能在本机低置信度地
+        "好像看见"猫、狗,以及杯子、手机、键盘、书等少量常见物品。
+        画面只在本机分析、看完即忘,绝不保存或上传。
 
-                gugu-objects.mlmodelc
-
-            放好后开启菜单栏的摄像头并通过系统授权即可生效。
-            不放也完全没问题——咕咕不会假装看见没有的东西。
-            当前是否启用,可在"咕咕今天看到了什么"审计页查看。
-            """
-            try? text.write(to: modelsReadme, atomically: true, encoding: .utf8)
-        }
+        这个目录目前不需要放任何东西,保留作未来扩展用。
+        """
+        try? readmeText.write(to: modelsReadme, atomically: true, encoding: .utf8)
     }
 
     static func eventsFile(for date: Date = Date()) -> URL {

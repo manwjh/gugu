@@ -157,7 +157,7 @@ func runOfflineSelfTest() {
                 && capabilityContext.contains("手势")
                 && capabilityContext.contains("视频事件")
                 && capabilityContext.contains("本地物品识别")
-                && capabilityContext.contains("模型未安装")
+                && capabilityContext.contains("内置识别")
                 && capabilityContext.contains("语音识别:代码已实现")
                 && capabilityContext.contains("当前未开启")
                 && capabilityContext.contains("不要假装看到了具体画面"),
@@ -166,14 +166,9 @@ func runOfflineSelfTest() {
               FileManager.default.fileExists(atPath: Paths.modelsDir.path),
               Paths.modelsDir.path)
         do {
-            // optional object model: missing is a clean, guided state
-            let readme = Paths.modelsDir.appendingPathComponent("README.txt")
-            let readmeText = (try? String(contentsOf: readme, encoding: .utf8)) ?? ""
+            // 物品识别现在用系统内置(无需安装模型),始终可用。
             let vision = VisionSensor()
-            let guided = FileManager.default.fileExists(atPath: readme.path)
-                && readmeText.contains("gugu-objects.mlmodelc")
-                && !vision.objectRecognitionAvailable   // no model installed → must not claim availability
-            check("vision.object_model_guidance", guided,
+            check("vision.builtin_recognition", vision.objectRecognitionAvailable,
                   "available=\(vision.objectRecognitionAvailable)")
         }
         let initialStage = GrowthStage(rawStage: PetState.load().stage)

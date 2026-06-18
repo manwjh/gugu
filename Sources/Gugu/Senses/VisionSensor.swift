@@ -52,19 +52,31 @@ struct VisionObjectObservation: Hashable {
     }
 
     static func localizedLabel(_ label: String) -> String {
-        switch label.lowercased() {
-        case "person": return "人"
-        case "cell phone", "phone", "mobile phone": return "手机"
-        case "cup", "mug": return "杯子"
-        case "book": return "书"
-        case "keyboard": return "键盘"
-        case "mouse": return "鼠标"
-        case "laptop": return "笔记本电脑"
-        case "bottle": return "瓶子"
-        case "dog": return "狗"
-        case "cat": return "猫"
-        default: return label
-        }
+        concreteLabel(label) ?? label
+    }
+
+    /// 把内置分类器的英文标识符映射成我们关心的"具体物品"中文名;不认得返回 nil。
+    /// 用模糊包含匹配,容忍内置分类法里 cup/coffee_cup/mug 这类同义变体。
+    static func concreteLabel(_ identifier: String) -> String? {
+        let id = identifier.lowercased()
+        func has(_ keys: String...) -> Bool { keys.contains { id.contains($0) } }
+        if has("cat") { return "猫" }
+        if has("dog", "puppy") { return "狗" }
+        if has("cup", "mug", "coffee") { return "杯子" }
+        if has("telephone", "cellphone", "smartphone", "mobile phone") || id == "phone" { return "手机" }
+        if has("laptop", "notebook computer", "notebook_computer") { return "笔记本电脑" }
+        if has("keyboard") { return "键盘" }
+        if id.contains("mouse") && !id.contains("mousepad") { return "鼠标" }
+        if has("book") { return "书" }
+        if has("bottle", "flask", "thermos") { return "瓶子" }
+        if has("houseplant", "potted plant", "flower", "plant") { return "植物" }
+        if has("spectacle", "eyeglass", "sunglass", "eyewear") || id == "glasses" { return "眼镜" }
+        if has("headphone", "earphone", "headset") { return "耳机" }
+        if has("teddy", "plush", "stuffed") { return "玩偶" }
+        if has("banana") { return "香蕉" }
+        if id.contains("apple") && !id.contains("pineapple") { return "苹果" }
+        if has("hat", "cap ", "beanie") { return "帽子" }
+        return nil
     }
 }
 
@@ -104,7 +116,7 @@ enum VisionStartOutcome {
 final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     private let session = AVCaptureSession()
     private let queue = DispatchQueue(label: "gugu.vision")
-    private let objectRecognizer = LocalObjectRecognizer()
+    private let objectRecognizer = BuiltInRecognizer()
     private let frameGate = VisionFrameGate()
     private var running = false
 
@@ -199,7 +211,7 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
 
         queue.async { [weak self, session, input, output, generation] in
             session.beginConfiguration()
-            session.sessionPreset = .low   // we only need low-res for face presence
+            session.sessionPreset = .medium   // 480p:够人脸/presence,也够手部与物品识别(.low 太糊)
             for oldOutput in session.outputs {
                 if let videoOutput = oldOutput as? AVCaptureVideoDataOutput {
                     videoOutput.setSampleBufferDelegate(nil, queue: nil)
@@ -278,11 +290,11 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         let handRequest = VNDetectHumanHandPoseRequest()
         handRequest.maximumHandCount = 2
         var requests: [VNRequest] = [faceRequest, handRequest]
-        let includesObjectRecognition = VisionPerformancePolicy.allowsObjectRecognition
-        let objectRequest = includesObjectRecognition ? objectRecognizer.makeRecognitionRequest() : nil
-        if let objectRequest {
-            requests.append(objectRequest)
-        }
+        // 物品识别是"重活",没必要每帧跑:最多 ~2Hz,省 CPU/电。
+        let runObjects = VisionPerformancePolicy.allowsObjectRecognition
+            && frameGate.allowObjectRun(minInterval: 0.5)
+        let objectRequests = runObjects ? objectRecognizer.makeRequests() : []
+        requests.append(contentsOf: objectRequests)
         let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .leftMirrored)
         let didPerform: Bool
         do {
@@ -295,8 +307,8 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         let handObservations = didPerform ? (handRequest.results ?? []) : []
         let faceSignals = VisionSensor.faceSignals(from: faces.first)
         let handSignals = VisionSensor.handSignals(from: handObservations)
-        let objects = didPerform ? objectRecognizer.results(from: objectRequest) : []
-        if let stats = frameGate.recordFrame(objectFrame: objectRequest != nil) {
+        let objects = (didPerform && runObjects) ? objectRecognizer.results(from: objectRequests) : []
+        if let stats = frameGate.recordFrame(objectFrame: runObjects) {
             Log.info("vision", stats)
         }
         // pixelBuffer goes out of scope here — nothing retained
@@ -504,6 +516,7 @@ private final class VisionFrameGate: @unchecked Sendable {
     private var frameCount = 0
     private var objectFrameCount = 0
     private var statsStartedAt = Date()
+    private var lastObjectRun = Date.distantPast
 
     var isAccepting: Bool {
         lock.lock()
@@ -519,6 +532,7 @@ private final class VisionFrameGate: @unchecked Sendable {
         frameCount = 0
         objectFrameCount = 0
         statsStartedAt = Date()
+        lastObjectRun = .distantPast
         return generation
     }
 
@@ -541,6 +555,16 @@ private final class VisionFrameGate: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return accepting ? generation : nil
+    }
+
+    /// 重活(物品识别)限频:距上次允许运行 >= minInterval 才放行,否则这帧跳过。
+    func allowObjectRun(minInterval: TimeInterval) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        let now = Date()
+        guard now.timeIntervalSince(lastObjectRun) >= minInterval else { return false }
+        lastObjectRun = now
+        return true
     }
 
     func accepts(_ expectedGeneration: Int) -> Bool {
@@ -829,74 +853,42 @@ private final class VideoUnderstandingTracker {
     }
 }
 
-private final class LocalObjectRecognizer: @unchecked Sendable {
-    private let lock = NSLock()
-    private var model: VNCoreMLModel?
+/// 内置图像识别——**不需要任何模型文件**,纯本地、开箱即用、看完即弃。
+/// - VNRecognizeAnimalsRequest:内置识别猫/狗(对一只宠物鸟很搭)。
+/// - VNClassifyImageRequest:内置通用分类,只挑"具体物品"白名单里的几个,
+///   避免把 material/indoor 这类抽象标签也念出来。
+private final class BuiltInRecognizer: @unchecked Sendable {
+    /// 内置识别始终可用(无需主人安装模型)。
+    var available: Bool { true }
 
-    var available: Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return model != nil
+    func makeRequests() -> [VNRequest] {
+        [VNRecognizeAnimalsRequest(), VNClassifyImageRequest()]
     }
 
-    init() {
-        let modelURL = Paths.modelsDir.appendingPathComponent("gugu-objects.mlmodelc")
-        guard FileManager.default.fileExists(atPath: modelURL.path) else {
-            // Not installed is a normal, expected state — object recognition stays
-            // off and the pet never claims to see specific objects. Record it so
-            // the audit page can guide the owner on how to enable it.
-            Log.info("vision", "未安装本地物品识别模型(可选);把编译好的模型放到 \(modelURL.path) 即可启用")
-            Audit.record(kind: "vision.object_model",
-                         summary: "本地物品识别未启用:未安装模型(可选功能)",
-                         detail: ["expected_path": modelURL.path,
-                                  "how_to_enable": "把编译好的 Core ML 模型命名为 gugu-objects.mlmodelc 放入 models/ 目录"])
-            return
-        }
-        do {
-            let config = MLModelConfiguration()
-            config.computeUnits = .all
-            let model = try MLModel(contentsOf: modelURL, configuration: config)
-            let visionModel = try VNCoreMLModel(for: model)
-            self.model = visionModel
-            Log.info("vision", "本地物品识别模型已加载:\(modelURL.path)")
-            Audit.record(kind: "vision.object_model", summary: "本地物品识别已启用",
-                         detail: ["path": modelURL.path])
-        } catch {
-            Log.info("vision", "本地物品识别模型加载失败:\(error)")
-            Audit.record(kind: "vision.object_model",
-                         summary: "本地物品识别未启用:模型加载失败",
-                         detail: ["path": modelURL.path, "error": "\(error)"])
-        }
-    }
-
-    func makeRecognitionRequest() -> VNCoreMLRequest? {
-        lock.lock()
-        let model = self.model
-        lock.unlock()
-        guard let model else { return nil }
-        let request = VNCoreMLRequest(model: model)
-        request.imageCropAndScaleOption = .scaleFit
-        return request
-    }
-
-    func results(from request: VNRequest?) -> [VisionObjectObservation] {
-        guard let results = request?.results else { return [] }
-        if let objects = results as? [VNRecognizedObjectObservation] {
-            return objects.compactMap { observation in
-                guard let label = observation.labels.first else { return nil }
-                return VisionObjectObservation(
-                    label: label.identifier,
-                    confidence: label.confidence,
-                    center: CGPoint(x: observation.boundingBox.midX, y: observation.boundingBox.midY),
-                    area: observation.boundingBox.width * observation.boundingBox.height
-                )
+    func results(from requests: [VNRequest]) -> [VisionObjectObservation] {
+        var out: [VisionObjectObservation] = []
+        for req in requests {
+            if let animals = req.results as? [VNRecognizedObjectObservation] {
+                for obs in animals {
+                    guard let label = obs.labels.first, label.confidence >= 0.5 else { continue }
+                    out.append(VisionObjectObservation(
+                        label: label.identifier,
+                        confidence: label.confidence,
+                        center: CGPoint(x: obs.boundingBox.midX, y: obs.boundingBox.midY),
+                        area: obs.boundingBox.width * obs.boundingBox.height))
+                }
+            } else if let classes = req.results as? [VNClassificationObservation] {
+                // classify 会吐几百个标签,且置信度偏低;只保留"够自信 + 在具体物品白名单"
+                // 的前两个,并把置信度归一到能通过下游门槛(下游阈值是按高置信模型调的)。
+                let picked = classes
+                    .filter { $0.confidence >= 0.3 && VisionObjectObservation.concreteLabel($0.identifier) != nil }
+                    .prefix(2)
+                for obs in picked {
+                    out.append(VisionObjectObservation(label: obs.identifier,
+                                                       confidence: max(obs.confidence, 0.65)))
+                }
             }
         }
-        if let classifications = results as? [VNClassificationObservation] {
-            return classifications.prefix(3).map {
-                VisionObjectObservation(label: $0.identifier, confidence: $0.confidence)
-            }
-        }
-        return []
+        return out
     }
 }

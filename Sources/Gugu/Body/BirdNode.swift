@@ -898,21 +898,6 @@ final class BirdNode: SKNode {
         node.run(.sequence([popIn, behavior, .fadeOut(withDuration: 0.3), .removeFromParent()]))
     }
 
-    /// TEMP-DEBUG: 静态摆放四个漫符用于离屏渲染验证(验证后删除)。
-    func debugPlaceAllManpu() {
-        let layout: [(Manpu, CGPoint)] = [
-            (.sweat, CGPoint(x: -22, y: 40)),
-            (.anger, CGPoint(x: -7, y: 44)),
-            (.surprise, CGPoint(x: 7, y: 44)),
-            (.love, CGPoint(x: 22, y: 42)),
-        ]
-        for (kind, pos) in layout {
-            let n = makeManpuNode(kind)
-            n.position = pos
-            manpu.addChild(n)
-        }
-    }
-
     private func makeManpuNode(_ kind: Manpu) -> SKShapeNode {
         let node = SKShapeNode()
         node.lineJoin = .round
@@ -942,13 +927,13 @@ final class BirdNode: SKNode {
 
     private func heartPath() -> CGPath {
         let p = CGMutablePath()
-        p.move(to: CGPoint(x: 0, y: -5))
-        p.addCurve(to: CGPoint(x: -6, y: 2.5),
-                   control1: CGPoint(x: -3.2, y: -2), control2: CGPoint(x: -6, y: -1))
-        p.addArc(center: CGPoint(x: -3, y: 3.2), radius: 3.1, startAngle: .pi, endAngle: 0, clockwise: false)
-        p.addArc(center: CGPoint(x: 3, y: 3.2), radius: 3.1, startAngle: .pi, endAngle: 0, clockwise: false)
-        p.addCurve(to: CGPoint(x: 0, y: -5),
-                   control1: CGPoint(x: 6, y: -1), control2: CGPoint(x: 3.2, y: -2))
+        p.move(to: CGPoint(x: 0, y: -5.5))                  // 底尖
+        p.addCurve(to: CGPoint(x: 0, y: 3),                 // 左半:上行到顶部中央凹口
+                   control1: CGPoint(x: -7, y: -3),
+                   control2: CGPoint(x: -6.5, y: 6))
+        p.addCurve(to: CGPoint(x: 0, y: -5.5),              // 右半:下行回底尖
+                   control1: CGPoint(x: 6.5, y: 6),
+                   control2: CGPoint(x: 7, y: -3))
         p.closeSubpath()
         return p
     }
@@ -963,15 +948,15 @@ final class BirdNode: SKNode {
         return p
     }
 
-    /// 青筋(💢):四角向内收的尖角方块。
+    /// 青筋(💢):尖角朝上下左右、四边深凹的四角星,呈撞击/爆发感。
     private func angerPath() -> CGPath {
         let p = CGMutablePath()
-        let r: CGFloat = 6, i: CGFloat = 1.6
-        p.move(to: CGPoint(x: r, y: r))
-        p.addQuadCurve(to: CGPoint(x: -r, y: r), control: CGPoint(x: 0, y: i))
-        p.addQuadCurve(to: CGPoint(x: -r, y: -r), control: CGPoint(x: -i, y: 0))
-        p.addQuadCurve(to: CGPoint(x: r, y: -r), control: CGPoint(x: 0, y: -i))
-        p.addQuadCurve(to: CGPoint(x: r, y: r), control: CGPoint(x: i, y: 0))
+        let R: CGFloat = 7.5, i: CGFloat = 1.9
+        p.move(to: CGPoint(x: 0, y: R))                                   // 上
+        p.addQuadCurve(to: CGPoint(x: R, y: 0), control: CGPoint(x: i, y: i))      // → 右
+        p.addQuadCurve(to: CGPoint(x: 0, y: -R), control: CGPoint(x: i, y: -i))    // → 下
+        p.addQuadCurve(to: CGPoint(x: -R, y: 0), control: CGPoint(x: -i, y: -i))   // → 左
+        p.addQuadCurve(to: CGPoint(x: 0, y: R), control: CGPoint(x: -i, y: i))     // → 上
         p.closeSubpath()
         return p
     }
