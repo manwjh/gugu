@@ -1,8 +1,6 @@
 import Foundation
 @preconcurrency import AVFoundation
 import Vision
-import AppKit
-import CoreML
 
 enum VisionExpression: String {
     case smile, surprised, sleepy

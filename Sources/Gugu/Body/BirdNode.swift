@@ -869,21 +869,6 @@ final class BirdNode: SKNode {
 
     // MARK: - 漫符 (manpu) 情绪符号
 
-    /// TEMP-DEBUG: 静态摆放全部漫符用于离屏渲染验证(验证后删除)。
-    func debugPlaceAllManpu() {
-        let layout: [(Manpu, CGPoint)] = [
-            (.sweat, CGPoint(x: -36, y: 40)), (.anger, CGPoint(x: -24, y: 44)),
-            (.surprise, CGPoint(x: -12, y: 44)), (.love, CGPoint(x: 0, y: 42)),
-            (.music, CGPoint(x: 12, y: 44)), (.question, CGPoint(x: 26, y: 44)),
-            (.dizzy, CGPoint(x: 40, y: 44)),
-        ]
-        for (kind, pos) in layout {
-            let n = makeManpuNode(kind)
-            n.position = pos
-            manpu.addChild(n)
-        }
-    }
-
     /// 在头顶弹出一个情绪符号,播放「弹入 → 行为 → 淡出」后自动移除。
     /// 与身体动画解耦,可与 showBlush / 动作叠加。
     func showManpu(_ kind: Manpu, at anchor: CGPoint? = nil) {

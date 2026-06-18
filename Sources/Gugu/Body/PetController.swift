@@ -838,6 +838,9 @@ final class PetController: NSObject {
         stateUntil = Date().addingTimeInterval(3)
         bird.setViewDirection(.front)
         bird.flapWings(times: 8, fast: true)
+        bird.showManpu(.music)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { [weak self] in self?.bird.showManpu(.music) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) { [weak self] in self?.bird.showManpu(.music) }
         let hop = SKAction.sequence([
             .moveBy(x: 0, y: 14, duration: 0.14),
             .moveBy(x: 0, y: -14, duration: 0.12),
@@ -1271,8 +1274,10 @@ final class PetController: NSObject {
             ]))
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in self?.bird.tiltHead(false) }
         case .dizzy:
-            // 被戳晕:左右摇晃几下
-            bird.showManpu(.surprise)
+            // 被戳晕:左右摇晃 + 头顶螺旋 + 晕眼
+            bird.showManpu(.dizzy)
+            bird.dizzyEyes(true)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) { [weak self] in self?.bird.dizzyEyes(false) }
             bird.run(.sequence([
                 .rotate(toAngle: 0.18, duration: 0.1),
                 .rotate(toAngle: -0.18, duration: 0.1),
