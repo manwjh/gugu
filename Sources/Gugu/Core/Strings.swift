@@ -32,6 +32,10 @@ enum L {
     static var menuAccessibility: String { s("咕咕菜单", "Gugu Menu") }
     static var menuChat: String { s("和咕咕说话…", "Talk to Gugu…") }
     static var menuPoke: String { s("戳一下", "Poke") }
+    static var menuHome: String { s("进入小窝", "Open Home") }
+    static var menuHomeClose: String { s("离开小窝", "Close Home") }
+    static var homeHint: String { s("点左上角的画笔,画条线，我就能站上去啦~",
+                                    "Tap the pencil top-left and draw a line — I can stand on it!") }
     static var menuHeartbeatDebug: String { s("心跳一次(调试)", "Heartbeat (debug)") }
     static var menuDreamDebug: String { s("做梦一次(调试)", "Dream (debug)") }
     static var menuAudit: String { s("今天看到了什么", "Today's observations") }
@@ -105,9 +109,27 @@ enum L {
     static var chatDragTooltip: String { s("拖动输入框", "Drag input") }
     static var chatCloseTooltip: String { s("关闭输入框", "Close input") }
 
+    // Error messages with guidance
+    static var errorNoApiKey: String {
+        s("(咕咕想说话,但还没接上脑子。右键我 → 设置,填上 API Key)",
+          "(Gugu wants to talk, but the brain isn't connected yet. Right-click me → Settings, add your API Key)")
+    }
+    static var errorAuthFailed: String {
+        s("(咕咕脑子接不上了,密钥可能失效了。右键我 → 设置)",
+          "(Can't connect — API key might be invalid. Right-click me → Settings)")
+    }
+    static var errorNetwork: String {
+        s("(咕咕的脑子在远方,网络卡住了,等会儿再试?)",
+          "(My brain is far away — network hiccup. Try again in a moment?)")
+    }
+
     // MARK: - Greetings
 
     static var greetingNew: String { s("咕?(歪头看了看你)", "Gu? (tilts head curiously)") }
+    static var greetingNeedsSetup: String {
+        s("咕!(我还没接上脑子。右键我 → 设置,填上 API Key 就能和你说话了)",
+          "Gu! (My brain isn't connected yet. Right-click me → Settings, add an API Key so I can talk to you)")
+    }
     static var greetingBonded: String { s("你来啦!", "Hey, you're back!") }
     static var greetingDefault: String { s("咕咕。", "Gu gu.") }
 
@@ -144,6 +166,13 @@ enum L {
     static var budgetSleepy: String { s("(今天想了好多事,有点困了…)", "(Thought a lot today, getting sleepy…)") }
     static var micUnavailable: String { s("麦克风现在用不了。", "Mic isn't available right now.") }
     static var voiceFailed: String { s("我刚才没听明白,你再说一遍。", "I didn't catch that. Say it again?") }
+    static var voiceFailedNoKey: String {
+        s("(咕咕还没接上脑子,先去菜单栏图标 → 设置里填 API Key)",
+          "(Brain not connected yet — go to menu bar icon → Settings to add API Key)")
+    }
+    static var voiceFailedAuth: String {
+        s("(密钥好像失效了,去设置里看看?)", "(API key seems invalid — check Settings?)")
+    }
     static var grewUp: String { s("我好像长大了一点。", "I think I grew a little.") }
     static var perchCooldown: String { s("(刚试过，等一下再站)", "(Just tried, give me a sec)") }
     static var perchNoWindow: String { s("(没找到能站的窗口)", "(No window to perch on)") }
@@ -212,6 +241,10 @@ enum L {
           "I think I learned \"\(name)\"! Approve it and I'll have it.")
     }
     static var learnFailed: String { s("唔,我没学会,等下再教我?", "Hmm, I didn't get it. Teach me again later?") }
+    static var learnFailedNoKey: String {
+        s("(还没接上脑子,没法学。右键我 → 设置)",
+          "(Brain not connected — can't learn yet. Right-click me → Settings)")
+    }
 
     // MARK: - Rhythm display names
 

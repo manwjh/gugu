@@ -763,8 +763,6 @@ func runOfflineSelfTest() {
             let notLanded = MoveLibrary.shared.move(named: "坏动作") == nil
             check("move.proposal_guard", rejected && notLanded,
                   "rejected=\(rejected) notLanded=\(notLanded)")
-        } catch {
-            check("move.proposal_guard", false, "\(error)")
         }
 
         // 学习意图解析:口语请求 → 动作意图;非请求不误判

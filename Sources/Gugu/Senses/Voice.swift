@@ -39,11 +39,14 @@ final class Voice: NSObject {
         }
     }
 
-    /// 给嗓音打分,分高者更自然。核心:高质量(增强/高级)优先;Eloquence 引擎最机械,重罚;
+    /// 给嗓音打分,分高者更自然。核心:高质量(增强/高级)优先;玩具嗓/Eloquence 重罚;
     /// 同等条件下偏好首选语言变体,并避开保真度最低的 super-compact。
     static func naturalness(_ v: AVSpeechSynthesisVoice, preferred: String) -> Int {
         var score = v.quality.rawValue * 1000   // default=1, enhanced=2, premium=3
         let id = v.identifier
+        // 老式趣味嗓(Albert 沙哑、Whisper 气声、Bad News、Zarvox…)前缀都是这个。
+        // 它们和正经嗓同为 default 质量却不被任何条款扣分,会盖过 Samantha,务必重罚到任何正经嗓之下。
+        if id.hasPrefix("com.apple.speech.synthesis.voice.") { score -= 5000 }
         if id.contains("eloquence") { score -= 500 }       // DECtalk 风格,最生硬
         if id.contains("super-compact") { score -= 50 }    // 保真度最低
         let prefix = String(preferred.prefix(2))

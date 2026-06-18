@@ -7,7 +7,6 @@ final class Console: NSObject, NSWindowDelegate {
     private weak var app: GuguApp?
     private var chatWindow: ChatInputPanel?
     private var chatInput: NSTextField?
-    private var chatStatusLabel: NSTextField?
     private var chatCloseButton: NSButton?
     private var chatUserPositioned = false
     private var chatInFlight = 0
@@ -56,6 +55,7 @@ final class Console: NSObject, NSWindowDelegate {
         menu.addItem(.separator())
         menu.addItem(makeItem(L.menuChat, #selector(openChat), "t", icon: "bubble.left.and.text.bubble.right"))
         menu.addItem(makeItem(L.menuPoke, #selector(pokePet), "p", icon: "hand.tap"))
+        menu.addItem(makeItem(app?.home.isOpen == true ? L.menuHomeClose : L.menuHome, #selector(toggleHome), "", icon: "house"))
         menu.addItem(makeItem(L.menuHeartbeatDebug, #selector(forceHeartbeat), "", icon: "heart.text.square"))
         menu.addItem(makeItem(L.menuDreamDebug, #selector(forceDream), "", icon: "moon.zzz"))
         menu.addItem(.separator())
@@ -137,6 +137,7 @@ final class Console: NSObject, NSWindowDelegate {
         let menu = NSMenu()
         menu.addItem(makeItem(L.menuChat, #selector(openChat), "t", icon: "bubble.left.and.text.bubble.right"))
         menu.addItem(makeItem(L.menuPoke, #selector(pokePet), "p", icon: "hand.tap"))
+        menu.addItem(makeItem(app?.home.isOpen == true ? L.menuHomeClose : L.menuHome, #selector(toggleHome), "", icon: "house"))
         menu.addItem(.separator())
         let camItem = makeItem(visionToggleTitle(), #selector(toggleCamera), "", icon: app?.visionSensor.enabled == true ? "eye.slash" : "eye")
         menu.addItem(camItem)
@@ -199,6 +200,8 @@ final class Console: NSObject, NSWindowDelegate {
     }
 
     @objc func pokePet() { app?.pet.poked() }
+
+    @objc func toggleHome() { app?.toggleHome() }
 
     @objc func showAbilities() {
         app?.pet.say(L.abilitiesSpeech)
@@ -475,14 +478,6 @@ final class Console: NSObject, NSWindowDelegate {
         }
         content.addSubview(dragHandle)
 
-        let status = NSTextField(labelWithString: "")
-        status.frame = NSRect(x: 42, y: 12, width: 226, height: 22)
-        status.font = NSFont.systemFont(ofSize: 13)
-        status.textColor = NSColor.secondaryLabelColor
-        status.isHidden = true
-        status.autoresizingMask = [.width]
-        content.addSubview(status)
-
         let input = NSTextField(frame: NSRect(x: 42, y: 11, width: 226, height: 24))
         input.placeholderString = defaultChatPlaceholder
         input.autoresizingMask = [.width]
@@ -517,7 +512,6 @@ final class Console: NSObject, NSWindowDelegate {
         w.contentView = content
         chatWindow = w
         chatInput = input
-        chatStatusLabel = status
         chatCloseButton = close
     }
 
@@ -565,10 +559,16 @@ final class Console: NSObject, NSWindowDelegate {
                 }
                 // 避免双重声音:如果动作包含 say 步骤,让动作自己说话,不再朗读 reply
                 let actionHasSpeech = MoveLibrary.shared.move(named: result.action)?.steps.contains { $0.op == "say" } ?? false
+                // aside 是模型写的轻量动作旁白(如"咕咕歪了歪头"),比通用动作标签更自然;
+                // 没有 aside 时退回到通用动作标签。
+                let asideStatus = !result.aside.isEmpty ? result.aside
+                    : (result.action != "idle" ? Console.actionLabel(result.action) : "")
                 if !result.reply.isEmpty && !actionHasSpeech {
                     app.pet.say(result.reply)
-                } else if result.action != "idle" {
-                    setChatStatus(Console.actionLabel(result.action), transient: true)
+                    // 气泡说出口的同时,聊天框补一行轻量旁白(两个不同的展示面,不冲突)。
+                    if !result.aside.isEmpty { setChatStatus(result.aside, transient: true) }
+                } else if !asideStatus.isEmpty {
+                    setChatStatus(asideStatus, transient: true)
                 } else {
                     // 兜底:模型既没话说也没动作(空 speech + idle)。不再静默——
                     // 给一个轻微的"我听到了"反应,聊天框也提示一下,避免"反应丢失"。
@@ -577,7 +577,7 @@ final class Console: NSObject, NSWindowDelegate {
                     setChatStatus(L.chatNoReply, transient: true)
                 }
             } catch {
-                setChatStatus(L.chatFailed, transient: true)
+                setChatStatus(Brain.userMessage(for: error, config: app.config), transient: true)
                 Log.info("chat", "失败: \(error)")
             }
         }
@@ -606,8 +606,6 @@ final class Console: NSObject, NSWindowDelegate {
     }
 
     private func setChatStatus(_ text: String, transient: Bool) {
-        chatStatusLabel?.stringValue = ""
-        chatStatusLabel?.isHidden = true
         chatInput?.isHidden = false
         chatInput?.placeholderString = text.isEmpty ? defaultChatPlaceholder : text
         guard transient, !text.isEmpty else { return }

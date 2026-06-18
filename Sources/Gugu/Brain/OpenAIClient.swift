@@ -111,13 +111,27 @@ struct OpenAIClient: LLMClient {
             throw LLMError.malformed(bodyText)
         }
         let message = first["message"] as? [String: Any]
-        let text = (message?["content"] as? String) ?? ""
+        var text = (message?["content"] as? String) ?? ""
         let stop = (first["finish_reason"] as? String) ?? "unknown"
+        // 有些 reasoning 模型把答案落在 reasoning_content,而 content 为空。回退取之,
+        // 让下游的宽松 JSON 提取还有机会捞到内容。
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let reasoning = (message?["reasoning_content"] as? String)
+                ?? (message?["reasoning"] as? String) ?? ""
+            if !reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                text = reasoning
+            }
+        }
         // A reasoning model that ran out of budget mid-thought returns
         // finish_reason "length" with empty/partial content. Surface that
         // distinctly so it's diagnosable (and not mistaken for a model refusal).
         if stop == "length" && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             throw LLMError.malformed("truncated: reasoning consumed the token budget before any output (raise max_tokens)")
+        }
+        // 200 但正文(含 reasoning 回退)仍为空:不静默返回空,抛可重试错误再试一次,
+        // 否则 gugu 会"听到却没反应"。
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            throw LLMError.empty("finish_reason=\(stop)")
         }
         return LLMReply(text: text, stopReason: stop)
     }

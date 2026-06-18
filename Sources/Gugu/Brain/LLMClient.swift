@@ -51,11 +51,14 @@ enum LLMError: Error, CustomStringConvertible {
     case malformed(String)
     /// 传输层错误(超时/断网/连接被中转通道挂住)。可重试。
     case transport(String)
+    /// 200 但正文为空(reasoning 模型有时只填 reasoning_content)。可重试。
+    case empty(String)
     var description: String {
         switch self {
         case .http(let c, let b): return "HTTP \(c): \(b.prefix(300))"
         case .malformed(let s): return "malformed response: \(s.prefix(300))"
         case .transport(let s): return "transport error: \(s.prefix(300))"
+        case .empty(let s): return "empty content: \(s.prefix(300))"
         }
     }
 }
@@ -107,6 +110,7 @@ enum LLMRetry {
         switch error {
         case .http(let code, _): return isTransient(code)
         case .transport: return true
+        case .empty: return true
         case .malformed: return false
         }
     }

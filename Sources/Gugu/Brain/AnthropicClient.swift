@@ -76,6 +76,11 @@ struct AnthropicClient: LLMClient {
             (block["type"] as? String) == "text" ? block["text"] as? String : nil
         }.joined()
         let stop = obj["stop_reason"] as? String ?? "unknown"
+        // 200 但没有任何文本块:不静默返回空(下游会退化成"听到却没反应"),
+        // 抛可重试错误再试一次,与 OpenAIClient 的空响应处理对齐。
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            throw LLMError.empty("stop_reason=\(stop)")
+        }
         return LLMReply(text: text, stopReason: stop)
     }
 

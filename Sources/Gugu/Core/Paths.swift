@@ -22,6 +22,8 @@ enum Paths {
     static let progressState = root.appendingPathComponent("progress.json")
     static let dreamBatchState = root.appendingPathComponent("dream_batch.json")
     static let pinnedMemory = root.appendingPathComponent("pinned.json")
+    static let homeState  = root.appendingPathComponent("home.json")
+    static let homePlatforms = root.appendingPathComponent("home_platforms.json")
     static let memoryDir  = root.appendingPathComponent("memory", isDirectory: true)
     static let skillsDir  = root.appendingPathComponent("skills", isDirectory: true)
     static let movesDir   = root.appendingPathComponent("moves", isDirectory: true)

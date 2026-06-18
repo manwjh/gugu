@@ -737,6 +737,58 @@ final class BirdNode: SKNode {
         ]))
     }
 
+    /// 朝行进方向翻身:只翻 `xScale` 符号,保留 growthScale 量级(`xScale == ±growthScale`)。
+    func faceWalking(right: Bool) {
+        let mag = abs(xScale)
+        xScale = mag * (right ? 1 : -1)
+    }
+
+    /// 走路步态:一只脚踏地"咬住地面",另一只抬起前摆落到新落点,交替进行。
+    ///
+    /// 关键是治"滑步"——脚是身体的子节点,身体匀速前移时,**踏地的脚在局部坐标里反向滑动**,
+    /// 正好抵消身体位移,所以世界里它钉在原地;只有摆动脚才抬起、向前迈到下一个落点。
+    /// `parentDx` 是身体在父坐标里的水平净位移(带符号)。步数取偶数 → 每只脚净位移 0
+    /// (cleanup 不复位脚,必须自洽归零,否则脚会永久偏移)。
+    func walkCadence(over dur: TimeInterval, parentDx: CGFloat) {
+        guard dur > 0.06, abs(parentDx) > 1 else { return }
+        let sx = xScale == 0 ? 1 : xScale
+        var steps = Int((abs(parentDx) / 12).rounded())   // 约 12pt 一步
+        steps = max(2, min(6, steps))
+        if steps % 2 != 0 { steps += 1 }                  // 偶数 → 每脚净 0
+        let stepDur = dur / Double(steps)
+        let half = max(0.03, stepDur / 2)
+        // 身体每步的前移量,换算到脚的局部坐标(除以 xScale,含朝向符号与 growthScale)。
+        let advance = (parentDx / sx) / CGFloat(steps)
+
+        // 踏地:局部反向滑 advance(线性,匹配身体匀速)→ 世界里脚不动。
+        func plant() -> SKAction {
+            .moveBy(x: -advance, y: 0, duration: stepDur)   // linear,精确抵消身体前移
+        }
+        // 抬腿前摆:局部前移 advance(世界里 = 2×身体步距,迈到新落点)+ 抬起落下。
+        func swing() -> SKAction {
+            let fwd = SKAction.moveBy(x: advance, y: 0, duration: stepDur); fwd.timingMode = .easeInEaseOut
+            let up = SKAction.moveBy(x: 0, y: 3, duration: half); up.timingMode = .easeOut
+            let down = SKAction.moveBy(x: 0, y: -3, duration: half); down.timingMode = .easeIn
+            return .group([fwd, .sequence([up, down])])
+        }
+        func legSequence(swingFirst: Bool) -> SKAction {
+            var seq: [SKAction] = []
+            var sw = swingFirst
+            for _ in 0..<steps { seq.append(sw ? swing() : plant()); sw.toggle() }
+            return .sequence(seq)
+        }
+        footL.removeAction(forKey: "walkStep")
+        footR.removeAction(forKey: "walkStep")
+        footL.run(legSequence(swingFirst: false), withKey: "walkStep")  // 左脚先踏地
+        footR.run(legSequence(swingFirst: true), withKey: "walkStep")   // 右脚先迈步
+
+        // 身体朝行进方向轻微前倾、再归位(净 0)。幅度要小。
+        let dir: CGFloat = parentDx >= 0 ? -1 : 1
+        let lean = SKAction.rotate(toAngle: dir * 0.03, duration: dur * 0.35); lean.timingMode = .easeInEaseOut
+        let back = SKAction.rotate(toAngle: 0, duration: dur * 0.35); back.timingMode = .easeInEaseOut
+        run(.sequence([lean, .wait(forDuration: max(0, dur * 0.3)), back]), withKey: "walkLean")
+    }
+
     /// Stretch: a brief squash-then-stretch with a small wing lift, like a yawny stretch.
     func stretchOnce() {
         run(.sequence([

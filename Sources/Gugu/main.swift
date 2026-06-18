@@ -6,6 +6,7 @@ import Foundation
 final class GuguApp: NSObject, NSApplicationDelegate {
     var config: Config!
     var pet: PetController!
+    var home: HomeController!
     var brain: Brain!
     var budget: Budget!
     var affect: Affect!
@@ -41,6 +42,9 @@ final class GuguApp: NSObject, NSApplicationDelegate {
                               screen: screenSensor, budget: budget, config: config)
         pet = PetController()
         pet.refreshGrowthStage()
+        home = HomeController()
+        home.onFrameChange = { [weak self] frame in self?.pet.updateHomeFrame(frame) }
+        home.onPlatformsChange = { [weak self] platforms in self?.pet.updatePlatforms(platforms) }
         console = Console(app: self)
         pet.onStateChange = { [weak self] _ in
             self?.console.refreshMenu()
@@ -59,12 +63,18 @@ final class GuguApp: NSObject, NSApplicationDelegate {
         Log.info("app", "咕咕醒了。\(budget.statusLine)")
         EventBus.shared.post(kind: "wake", summary: L.eventWake, weight: 10)
 
+        // Check if API key is configured (gentle nudge for first-time users)
+        let needsSetup = config.apiKey.trimmingCharacters(in: .whitespaces).isEmpty
+
         // immediate local greeting (zero-cost): warmer if we already know the owner
         let state0 = PetState.load()
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
             guard let self else { return }
             let greeting: String
-            if state0.days_together <= 0 {
+            if needsSetup && state0.days_together <= 0 {
+                // First-time user without API key: friendly setup hint
+                greeting = L.greetingNeedsSetup
+            } else if state0.days_together <= 0 {
                 greeting = L.greetingNew
             } else if state0.bond > 0.5 {
                 greeting = L.greetingBonded
@@ -277,7 +287,8 @@ final class GuguApp: NSObject, NSApplicationDelegate {
                 }
             } catch {
                 Log.info("voice", "对话失败: \(error)")
-                self.pet.say(L.voiceFailed)
+                let msg = Brain.userMessage(for: error, config: self.brain.config)
+                self.pet.say(msg)
             }
         }
     }
@@ -316,7 +327,8 @@ final class GuguApp: NSObject, NSApplicationDelegate {
                 self.console.refreshMenu()
             } catch {
                 Log.info("learn_move", "学习失败: \(error)")
-                self.pet.say(L.learnFailed)
+                let msg = Brain.userMessage(for: error, config: self.brain.config)
+                self.pet.say(msg)
             }
         }
         return true
@@ -452,6 +464,30 @@ final class GuguApp: NSObject, NSApplicationDelegate {
             }
         }
         RunLoop.main.add(minuteTimer!, forMode: .common)
+    }
+
+    /// 打开/关闭小窝:开则咕咕飞入并被限制在框内;关则咕咕飞回桌面。
+    func toggleHome() {
+        if home.isOpen {
+            pet.leaveHome()
+            home.close()
+        } else {
+            home.open()
+            pet.updatePlatforms(home.platforms)   // 同步上次画的平台
+            pet.enterHome(frame: home.frame)
+            maybeShowHomeHint()
+        }
+        console.refreshMenu()
+    }
+
+    /// 首次进入小窝且还没画过平台时,引导一次画笔用法(只一次,记在 UserDefaults)。
+    private func maybeShowHomeHint() {
+        guard home.platforms.isEmpty,
+              !UserDefaults.standard.bool(forKey: "gugu.homeHintShown") else { return }
+        UserDefaults.standard.set(true, forKey: "gugu.homeHintShown")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { [weak self] in
+            self?.pet.say(L.homeHint)
+        }
     }
 
     func localCapabilitiesContext() -> String {

@@ -146,6 +146,35 @@ final class Brain {
         return nil
     }
 
+    /// Classify an error for user-facing messages. Returns a user-friendly message
+    /// based on the error type, checking config state to give actionable guidance.
+    static func userMessage(for error: Error, config: Config) -> String {
+        // Check if API key is missing first (most common first-time issue)
+        if config.apiKey.trimmingCharacters(in: .whitespaces).isEmpty {
+            return L.errorNoApiKey
+        }
+
+        // Classify the actual error
+        if let llmError = error as? LLMError {
+            switch llmError {
+            case .http(let code, _):
+                // Authentication/authorization failures
+                if code == 401 || code == 403 {
+                    return L.errorAuthFailed
+                }
+                // Other HTTP errors (rate limit, server error, etc.)
+                return L.chatFailed
+            case .transport:
+                return L.errorNetwork
+            case .malformed, .empty:
+                return L.chatFailed
+            }
+        }
+
+        // Fallback for unknown error types
+        return L.chatFailed
+    }
+
     // MARK: - L3 Chat
 
     /// Chat result: a short spoken reply plus an optional body action the owner
@@ -236,7 +265,8 @@ final class Brain {
     ]
 
     func chat(_ userText: String, rhythmLine: String, mood: String = "", localCapabilities: String = "") async throws -> ChatResult {
-        _ = memory.capturePinnedFact(from: userText, source: "chat")
+        // 固定记忆已在 handleLocalCommand(两条链路的统一首步)里捕获过,这里不再重复,
+        // 否则同一句话会写两条 Record + 两条审计(来源还不一致)。
         chatHistory.append((role: "user", text: userText))
         if chatHistory.count > 20 { chatHistory.removeFirst(chatHistory.count - 20) }
 

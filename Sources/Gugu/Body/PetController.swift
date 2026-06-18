@@ -60,22 +60,37 @@ final class PetView: SKView {
 enum PetBodyState: String {
     case idle, walk, approach, retreat, perch, flyingToPerch
     case sleep, dance, stare, dragged, falling
+    case enteringHome
 }
 
 private enum SupportSurface {
     case appWindow(id: CGWindowID, frame: CGRect)
     case chatInput(frame: CGRect)
+    case roomRim(frame: CGRect)        // 小窝内的"上沿"——房间里没有 app 窗口可栖,就栖在房间高处
+    case platform(id: UUID)            // 站在/栖在主人画的某条平台上
 
     var frame: CGRect {
         switch self {
-        case .appWindow(_, let frame), .chatInput(let frame):
+        case .appWindow(_, let frame), .chatInput(let frame), .roomRim(let frame):
             return frame
+        case .platform:
+            return .zero               // 平台几何另算(房间归一化坐标),不走 frame
         }
     }
 
     var isChatInput: Bool {
         if case .chatInput = self { return true }
         return false
+    }
+
+    var isRoomRim: Bool {
+        if case .roomRim = self { return true }
+        return false
+    }
+
+    var platformId: UUID? {
+        if case .platform(let id) = self { return id }
+        return nil
     }
 }
 
@@ -94,12 +109,15 @@ final class PetController: NSObject {
     private var facingRight = true
     private var growthScale: CGFloat = 1
     private var walkTargetX: CGFloat?
+    private var homeFrame: CGRect?            // 小窝包围框(屏幕坐标);非 nil 表示在小窝(房间)里
+    private var platforms: [Platform] = []    // 房间内的平台(归一化坐标)
     private var behaviorTimer: Timer?
     private var physicsTimer: Timer?
     private var supportSurface: SupportSurface?
     private var perchCompletion: (@MainActor () -> Void)?
     private var perchCheckTimer: Timer?
     private var dragSamples: [(p: CGPoint, t: TimeInterval)] = []
+    private var dragGrabOffset = CGPoint.zero  // 抓取点相对窗口原点的偏移,拖拽时保持不瞬移
     private var stateUntil: Date = .distantPast
     private var fallFromDrag = false          // distinguishes owner-throw from perch-fall
     private var lastPerchAttempt = Date.distantPast
@@ -161,8 +179,37 @@ final class PetController: NSObject {
         screen.visibleFrame.minY - feetY + 4
     }
 
+    /// 当前"世界"的边界(窗口 origin 口径):地板/左右墙/天花板。
+    /// 在小窝里 → 用房间矩形 + 鸟可见外框内缩;在桌面 → 用屏幕可见区。
+    /// 所有走/落/撞墙/栖息都读它,于是窝内窝外物理完全一致,只是边界不同。
+    private struct World {
+        var groundY: CGFloat   // 站在地板上时的窗口 origin.y
+        var minX: CGFloat      // 左墙(窗口 origin.x 下限)
+        var maxX: CGFloat      // 右墙(窗口 origin.x 上限)
+        var ceilingY: CGFloat  // 天花板(窗口 origin.y 上限)
+    }
+
+    private var currentWorld: World {
+        if let home = homeFrame {
+            let bv = birdVisibleFrame()
+            let pad = homePad
+            var minX = home.minX + pad - bv.minX
+            var maxX = home.maxX - pad - bv.maxX
+            if maxX < minX { let c = (minX + maxX) / 2; minX = c; maxX = c }
+            let groundY = home.minY + pad - bv.minY
+            var ceilingY = home.maxY - pad - bv.maxY
+            if ceilingY < groundY { ceilingY = groundY }
+            return World(groundY: groundY, minX: minX, maxX: maxX, ceilingY: ceilingY)
+        }
+        let vf = screen.visibleFrame
+        return World(groundY: vf.minY - feetY + 4,
+                     minX: vf.minX,
+                     maxX: vf.maxX - winSize.width,
+                     ceilingY: vf.maxY - winSize.height)
+    }
+
     private var isOnGround: Bool {
-        abs(window.frame.origin.y - groundY(for: screen)) < 2
+        abs(window.frame.origin.y - currentWorld.groundY) < 2
     }
 
     private func setFacing(right: Bool) {
@@ -183,32 +230,55 @@ final class PetController: NSObject {
 
     private func physicsTick(dt: CGFloat) {
         var origin = window.frame.origin
-        let scr = screen
 
         switch state {
         case .falling:
+            let world = currentWorld
             vel.dy -= 2400 * dt          // gravity
             vel.dx *= 0.995
             origin.x += vel.dx * dt
             origin.y += vel.dy * dt
-            let gy = groundY(for: scr)
-            if origin.y <= gy {
-                origin.y = gy
+            // 房间里:先查是否撞到主人画的平台
+            if let hit = checkPlatformLanding(at: origin, vel: vel) {
+                origin = hit.landingOrigin
+                supportSurface = .platform(id: hit.platformId)
+                land()
+            } else if origin.y <= world.groundY {
+                origin.y = world.groundY
                 land()
             }
-            // wall bounce
-            if origin.x < scr.visibleFrame.minX { origin.x = scr.visibleFrame.minX; vel.dx = abs(vel.dx) * 0.5 }
-            if origin.x > scr.visibleFrame.maxX - winSize.width {
-                origin.x = scr.visibleFrame.maxX - winSize.width; vel.dx = -abs(vel.dx) * 0.5
+            // 房间里被往上丢:撞天花板回弹,不飞出房间
+            if homeFrame != nil && origin.y > world.ceilingY {
+                origin.y = world.ceilingY
+                if vel.dy > 0 { vel.dy = -vel.dy * 0.4 }
             }
+            // wall bounce
+            if origin.x < world.minX { origin.x = world.minX; vel.dx = abs(vel.dx) * 0.5 }
+            if origin.x > world.maxX { origin.x = world.maxX; vel.dx = -abs(vel.dx) * 0.5 }
             window.setFrameOrigin(origin)
 
         case .walk, .approach, .retreat:
-            guard let target = walkTargetX else { transition(to: .idle); return }
+            guard var target = walkTargetX else { transition(to: .idle); return }
+            let world = currentWorld
+            // 站在平台上:沿平台斜面走,目标与位置都夹在平台两端之间(到端折返)。
+            var onPlat: Platform?
+            if case .platform(let id) = supportSurface,
+               let p = platforms.first(where: { $0.id == id }),
+               let r = platformOriginXRange(p) {
+                onPlat = p
+                target = max(r.min, min(target, r.max))
+            }
             let speed: CGFloat = state == .retreat ? 160 : 90
             let dir: CGFloat = target > origin.x ? 1 : -1
             setFacing(right: dir > 0)
             origin.x += dir * speed * dt
+            if let p = onPlat, let r = platformOriginXRange(p) {
+                origin.x = max(r.min, min(origin.x, r.max))
+                if let py = platformOriginY(p, birdCenterX: origin.x + winSize.width / 2) { origin.y = py }
+            } else {
+                origin.y = world.groundY     // 贴着地板走(房间地板或桌面地面)
+                origin.x = max(world.minX, min(origin.x, world.maxX))
+            }
             // gentle hop bob
             bird.position.y = feetY + abs(sin(Date().timeIntervalSince1970 * 10)) * 3
             if abs(origin.x - target) < 8 {
@@ -216,7 +286,6 @@ final class PetController: NSObject {
                 bird.position.y = feetY
                 transition(to: .idle)
             }
-            origin.x = max(scr.visibleFrame.minX, min(origin.x, scr.visibleFrame.maxX - winSize.width))
             window.setFrameOrigin(origin)
 
         case .flyingToPerch:
@@ -231,6 +300,24 @@ final class PetController: NSObject {
             if dist < 6 {
                 window.setFrameOrigin(dest)
                 becomePerched()
+            } else {
+                let speed: CGFloat = 380
+                setFacing(right: dx > 0)
+                origin.x += dx / dist * speed * dt
+                origin.y += dy / dist * speed * dt
+                window.setFrameOrigin(origin)
+            }
+
+        case .enteringHome:
+            guard homeFrame != nil else { transition(to: .idle); return }
+            let world = currentWorld
+            let dest = CGPoint(x: (world.minX + world.maxX) / 2, y: world.groundY)
+            let dx = dest.x - origin.x, dy = dest.y - origin.y
+            let dist = hypot(dx, dy)
+            if dist < 6 {
+                window.setFrameOrigin(dest)
+                bird.position.y = feetY
+                transition(to: .idle)            // 飞进去落到地板,之后过和窝外一致的 idle 生活
             } else {
                 let speed: CGFloat = 380
                 setFacing(right: dx > 0)
@@ -269,6 +356,151 @@ final class PetController: NSObject {
         fallFromDrag = false
     }
 
+    // MARK: - Home (小窝) mode
+
+    private let homePad: CGFloat = 6
+
+    var isInHome: Bool { homeFrame != nil }
+
+    /// 鸟身可见核心外框(窗口本地坐标)。**不**用 calculateAccumulatedFrame——
+    /// 那会把隐藏的 aura 光环(半径33)、zzz、展开的翅膀都算进去,导致夹边界时
+    /// 以为鸟比实际大一圈,既缩小活动区又在四周留隐形空隙。这里用固定的身体核心
+    /// 框(绕 BirdNode 原点按 growthScale 缩放),贴边均匀、活动区最大化。
+    private func birdVisibleFrame() -> CGRect {
+        let s = growthScale
+        let core = CGRect(x: -22, y: -4, width: 48, height: 56)   // 本地核心(不含 aura/zzz)
+        let cx = winSize.width / 2                                // bird.position.x 固定在窗口中线
+        return CGRect(x: cx + core.minX * s,
+                      y: feetY + core.minY * s,
+                      width: core.width * s,
+                      height: core.height * s)
+    }
+
+    /// 房间内"踱步"目标 X:朝空间更大的一侧走一段(到墙为止),自然形成撞墙折返。
+    private func randomGroundWalkTargetX(in world: World) -> CGFloat {
+        guard world.maxX > world.minX else { return world.minX }
+        let o = window.frame.origin.x
+        let span = world.maxX - world.minX
+        let towardRight = (world.maxX - o) >= (o - world.minX)
+        let step = CGFloat.random(in: (span * 0.35)...(span * 1.0))
+        let raw = towardRight ? o + step : o - step
+        return max(world.minX, min(raw, world.maxX))
+    }
+
+    /// 进入小窝:从当前位置飞进房间、落到地板,之后过和窝外一致的 idle 生活。
+    func enterHome(frame: CGRect) {
+        if state == .sleep { wake() }
+        perchCheckTimer?.invalidate()
+        supportSurface = nil
+        perchCompletion = nil
+        walkTargetX = nil
+        speechAvoidanceFrame = nil
+        vel = .zero
+        homeFrame = frame
+        bird.setViewDirection(.side)
+        bird.position.y = feetY
+        bird.flapWings(times: 16, fast: true)
+        transition(to: .enteringHome)
+    }
+
+    /// 小窝被拖动/缩放:更新边界,把咕咕重新落到地板/贴回墙内;栖在上沿则贴回上沿。
+    func updateHomeFrame(_ frame: CGRect) {
+        guard homeFrame != nil else { return }
+        homeFrame = frame
+        let world = currentWorld
+        if case .roomRim = supportSurface {
+            supportSurface = .roomRim(frame: frame)
+            if state == .perch || state == .flyingToPerch {
+                window.setFrameOrigin(perchPoint(for: .roomRim(frame: frame)))
+                return
+            }
+        }
+        var o = window.frame.origin
+        o.x = max(world.minX, min(o.x, world.maxX))
+        if state == .falling || state == .dragged {
+            o.y = max(world.groundY, min(o.y, world.ceilingY))
+        } else {
+            o.y = world.groundY          // 站/走 → 贴地板
+        }
+        window.setFrameOrigin(o)
+        if let t = walkTargetX { walkTargetX = max(world.minX, min(t, world.maxX)) }
+    }
+
+    /// 离开小窝:解除边界,世界切回桌面,咕咕从半空自然坠回桌面地面。
+    func leaveHome() {
+        guard homeFrame != nil else { return }
+        homeFrame = nil
+        walkTargetX = nil
+        platforms = []
+        if case .roomRim = supportSurface { supportSurface = nil }
+        perchCheckTimer?.invalidate()
+        if state == .dragged { return }   // 拖拽中,松手时再决定
+        if state == .sleep { wake() }     // 先醒,避免闭眼下落
+        bird.flapWings(times: 6, fast: true)
+        vel = CGVector(dx: CGFloat.random(in: -40...40), dy: 0)
+        transition(to: .falling)
+    }
+
+    /// HomeController 通知平台变化(画/删/清空):更新本地缓存。
+    /// 若咕咕正站/栖在某条被删掉的平台上 → 解除支撑,自然坠落。
+    func updatePlatforms(_ newPlatforms: [Platform]) {
+        platforms = newPlatforms
+        if let id = supportSurface?.platformId,
+           !newPlatforms.contains(where: { $0.id == id }) {
+            supportSurface = nil
+            perchCheckTimer?.invalidate()
+            if state != .dragged {
+                bird.flapWings(times: 4, fast: true)
+                vel = CGVector(dx: CGFloat.random(in: -30...30), dy: 0)
+                bird.position.y = feetY
+                transition(to: .falling)
+            }
+        }
+    }
+
+    /// 下落中穿过某平台 → 返回落脚信息(平台 id + 落脚点);否则 nil。
+    /// 检测:从上一帧到这一帧,窗口中心点穿过了某条线段,且速度向下(vel.dy < 0)。
+    private func checkPlatformLanding(at origin: CGPoint, vel: CGVector) -> (platformId: UUID, landingOrigin: CGPoint)? {
+        guard let home = homeFrame, vel.dy < 0 else { return nil }
+        // 落点参照鸟"可见底"(与房间地板一致),而非 feetY 锚点,否则脚会穿到线下面。
+        let bvMinY = birdVisibleFrame().minY
+        let birdCenterX = origin.x + winSize.width / 2
+        let birdCenterY = origin.y + feetY
+        let normBird = CGPoint(x: (birdCenterX - home.minX) / home.width,
+                               y: (birdCenterY - home.minY) / home.height)
+        // 上一帧位置(粗略:当前 - 速度*dt,dt≈1/60)
+        let dt: CGFloat = 1.0 / 60.0
+        let prevCenterY = birdCenterY - vel.dy * dt
+        let normPrev = CGPoint(x: normBird.x, y: (prevCenterY - home.minY) / home.height)
+
+        for plat in platforms {
+            // 线段 y 范围
+            let segMinY = min(plat.start.y, plat.end.y)
+            let segMaxY = max(plat.start.y, plat.end.y)
+            // 穿过判断:上一帧在线段上方,这一帧在线段下方或上,且横向在线段 x 范围内
+            guard normPrev.y >= segMinY, normBird.y <= segMaxY else { continue }
+            // 计算线段在 normBird.x 处的 y 值(线性插值)
+            let dx = plat.end.x - plat.start.x
+            if abs(dx) < 1e-6 {
+                // 垂直线段(x 相同):只要 x 匹配就算穿过
+                if abs(normBird.x - plat.start.x) < 0.01 {
+                    let landY = home.minY + segMaxY * home.height - bvMinY
+                    return (plat.id, CGPoint(x: origin.x, y: landY))
+                }
+                continue
+            }
+            let t = (normBird.x - plat.start.x) / dx
+            guard t >= 0, t <= 1 else { continue }  // 不在线段 x 范围内
+            let segY = plat.start.y + t * (plat.end.y - plat.start.y)
+            // 穿过:上一帧 >= segY,这一帧 <= segY
+            if normPrev.y >= segY && normBird.y <= segY {
+                let landY = home.minY + segY * home.height - bvMinY
+                return (plat.id, CGPoint(x: origin.x, y: landY))
+            }
+        }
+        return nil
+    }
+
     // MARK: - Autonomous idle life (zero cost)
 
     private func startBehaviorLoop() {
@@ -293,6 +525,64 @@ final class PetController: NSObject {
             return
         }
         guard state == .idle else { return }
+        // 站在平台上:沿平台走两步 / 偶尔跳去别的平台或跳下来 / 否则原地小动作。
+        if case .platform(let id) = supportSurface {
+            let roll = Double.random(in: 0..<1)
+            // 平台够长 → 45% 沿平台踱步(到端折返)
+            if roll < 0.45,
+               let plat = platforms.first(where: { $0.id == id }),
+               let r = platformOriginXRange(plat), r.max - r.min > 30 {
+                walkTargetX = CGFloat.random(in: r.min...r.max)
+                transition(to: .walk)
+                return
+            }
+            // 15% 跳去另一条平台(有多条时)
+            if roll < 0.60, platforms.count > 1,
+               let other = platforms.filter({ $0.id != id }).randomElement() {
+                supportSurface = .platform(id: other.id)
+                transition(to: .flyingToPerch)
+                bird.setViewDirection(.side)
+                bird.flapWings(times: 12, fast: true)
+                return
+            }
+            // 10% 跳下平台(回到地板/下层平台)
+            if roll < 0.70 {
+                supportSurface = nil
+                bird.flapWings(times: 4, fast: true)
+                vel = CGVector(dx: CGFloat.random(in: -50...50), dy: 0)
+                bird.position.y = feetY
+                transition(to: .falling)
+                return
+            }
+            // 其余:原地小动作
+            switch Int.random(in: 0..<5) {
+            case 0: bird.setViewDirection(.side); bird.groomOnce()
+            case 1: bird.setViewDirection(.front); bird.peckOnce()
+            case 2:
+                bird.setViewDirection(.front)
+                bird.tiltHead(true)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in self?.bird.tiltHead(false) }
+            case 3: bird.setViewDirection(.front); bird.flapWings(times: 2)
+            default: bird.stretchOnce()
+            }
+            return
+        }
+        // 在房间地板上、且画了平台:25% 概率飞上去玩(站到某条平台上)。
+        if isInHome, supportSurface == nil, !platforms.isEmpty, Double.random(in: 0..<1) < 0.25 {
+            let target = platforms.randomElement()!
+            supportSurface = .platform(id: target.id)
+            transition(to: .flyingToPerch)
+            bird.setViewDirection(.side)
+            bird.flapWings(times: 14, fast: true)
+            return
+        }
+        // 房间是用来看咕咕活动的空间:提高踱步频率,让走动明显可见(否则多被原地小动作淹没,
+        // 且 IdleSelector 在低精力时根本不 wander)。约 45% 直接踱步,其余仍走正常 idle 池。
+        if isInHome, Double.random(in: 0..<1) < 0.45 {
+            walkTargetX = randomGroundWalkTargetX(in: currentWorld)
+            transition(to: .walk)
+            return
+        }
         let mood = idleMoodProvider?() ?? (energy: 0.7, valence: 0.15)
         let move = idlePlayMoveProvider?()
         let behavior = IdleSelector.choose(roll: Double.random(in: 0...1),
@@ -300,10 +590,16 @@ final class PetController: NSObject {
                                            availableMove: move)
         switch behavior {
         case .wander:
+            if isInHome {
+                // 房间里:踱步到较远一侧(到墙折返),与窝外"偶尔走动"同一套机制。
+                walkTargetX = randomGroundWalkTargetX(in: currentWorld)
+                transition(to: .walk)
+                return
+            }
             guard !detachFromSupportBeforeGroundRelocation(action: "walk") else { return }
-            let scr = screen.visibleFrame
+            let world = currentWorld
             let dx = CGFloat.random(in: -180...180)
-            let target = max(scr.minX, min(window.frame.origin.x + dx, scr.maxX - winSize.width))
+            let target = max(world.minX, min(window.frame.origin.x + dx, world.maxX))
             walkTargetX = target
             transition(to: .walk)
         case .groom:
@@ -397,26 +693,26 @@ final class PetController: NSObject {
         }
         switch action {
         case "walk":
-            // 走两步:在附近小幅走动,而不是窜到屏幕另一头
-            let scr = screen.visibleFrame
+            // 走两步:在附近小幅走动,而不是窜到世界另一头
+            let world = currentWorld
             let step = CGFloat.random(in: 60...160) * (Bool.random() ? 1 : -1)
-            walkTargetX = max(scr.minX, min(window.frame.origin.x + step, scr.maxX - winSize.width))
+            walkTargetX = max(world.minX, min(window.frame.origin.x + step, world.maxX))
             transition(to: .walk)
         case "wander":
             // 大幅走动(心跳里偶尔用)
-            let scr = screen.visibleFrame
-            walkTargetX = CGFloat.random(in: scr.minX...(scr.maxX - winSize.width))
+            let world = currentWorld
+            walkTargetX = CGFloat.random(in: world.minX...world.maxX)
             transition(to: .walk)
         case "approach", "come":
+            let world = currentWorld
             let mouse = NSEvent.mouseLocation
-            walkTargetX = max(screen.visibleFrame.minX,
-                              min(mouse.x - winSize.width / 2, screen.visibleFrame.maxX - winSize.width))
+            walkTargetX = max(world.minX, min(mouse.x - winSize.width / 2, world.maxX))
             transition(to: .approach)
         case "retreat", "away":
-            let scr = screen.visibleFrame
-            let leftDist = window.frame.origin.x - scr.minX
-            let rightDist = scr.maxX - window.frame.origin.x
-            walkTargetX = leftDist < rightDist ? scr.minX + 8 : scr.maxX - winSize.width - 8
+            let world = currentWorld
+            let leftDist = window.frame.origin.x - world.minX
+            let rightDist = world.maxX - window.frame.origin.x
+            walkTargetX = leftDist < rightDist ? world.minX : world.maxX
             transition(to: .retreat)
         case "fly":
             flyInPlace()
@@ -444,6 +740,16 @@ final class PetController: NSObject {
             bird.setViewDirection(.front)
             bird.yawnOnce()
         case "jump", "hop":
+            // 站在平台上跳:给斜向上初速,detach,转 falling 抛物线飞行(可能落到另一平台)
+            if case .platform = supportSurface {
+                let horizDir: CGFloat = Bool.random() ? 1 : -1
+                vel = CGVector(dx: horizDir * 120, dy: 180)
+                supportSurface = nil
+                transition(to: .falling)
+                bird.flapWings(times: 3, fast: true)
+                return
+            }
+            // 地面/上沿:原地轻跳动画(不改变窗口位置)
             bird.run(.sequence([
                 .moveBy(x: 0, y: 22, duration: 0.16),
                 .moveBy(x: 0, y: -22, duration: 0.14),
@@ -472,9 +778,11 @@ final class PetController: NSObject {
         let total = MetaActionValidator.totalDuration(move.steps)
         stateUntil = Date().addingTimeInterval(total + 0.2)
         bird.stopIdleAnimations()
-        let action = MoveInterpreter.compile(move.steps, on: bird) { [weak self] text in
+        let action = MoveInterpreter.compile(move.steps, on: bird, say: { [weak self] text in
             self?.say(text)
-        }
+        }, face: { [weak self] right in
+            self?.facingRight = right
+        })
         bird.run(action, withKey: "learnedMove")
         DispatchQueue.main.asyncAfter(deadline: .now() + total + 0.25) { [weak self] in
             guard let self, self.state == .idle || self.state == .perch else { return }
@@ -482,6 +790,7 @@ final class PetController: NSObject {
             self.bird.setScale(self.growthScale)
             self.bird.xScale = (self.facingRight ? 1 : -1) * self.growthScale
             self.bird.position.y = self.feetY
+            self.bird.setViewDirection(.front)
             self.bird.startIdleAnimations()
         }
     }
@@ -583,6 +892,14 @@ final class PetController: NSObject {
         bird.xScale = (facingRight ? 1 : -1) * growthScale
         bird.yScale = growthScale
         bird.startIdleAnimations()
+        // 在小窝里醒来:贴回地板/墙内,回到 idle 站立,由 idle 循环决定下一步。
+        if homeFrame != nil, !(supportSurface?.isRoomRim ?? false) {
+            let world = currentWorld
+            var o = window.frame.origin
+            o.x = max(world.minX, min(o.x, world.maxX))
+            o.y = world.groundY
+            window.setFrameOrigin(o)
+        }
         transition(to: .idle)
     }
 
@@ -591,6 +908,20 @@ final class PetController: NSObject {
     // MARK: - Perch on frontmost window
 
     private func startPerch() {
+        // 房间里:优先栖到离当前位置最近的平台;没有平台才栖到房间上沿。
+        if let home = homeFrame {
+            perchCheckTimer?.invalidate()
+            if let nearest = nearestPlatform() {
+                supportSurface = .platform(id: nearest.id)
+            } else {
+                supportSurface = .roomRim(frame: home)
+            }
+            perchCompletion = nil
+            transition(to: .flyingToPerch)
+            bird.setViewDirection(.side)
+            bird.flapWings(times: 16, fast: true)
+            return
+        }
         // don't thrash: at most one perch attempt per 10s
         guard Date().timeIntervalSince(lastPerchAttempt) > 10 else {
             Log.info("perch", "冷却中，距上次尝试不到10s")
@@ -613,6 +944,7 @@ final class PetController: NSObject {
 
     func perch(on frame: CGRect) {
         guard state != .dragged else { return }
+        guard homeFrame == nil else { return }   // 小窝里不去栖息聊天框
         if state == .sleep { wake() }
         perchCheckTimer?.invalidate()
         supportSurface = .chatInput(frame: frame)
@@ -669,6 +1001,24 @@ final class PetController: NSObject {
     }
 
     private func perchPoint(for surface: SupportSurface) -> CGPoint {
+        // 平台:站在平台中点(鸟脚踩线段)
+        if case .platform(let id) = surface, let home = homeFrame,
+           let plat = platforms.first(where: { $0.id == id }) {
+            let (s, e) = plat.absolute(in: home)
+            let midX = (s.x + e.x) / 2
+            let midY = (s.y + e.y) / 2
+            return CGPoint(x: midX - winSize.width / 2, y: midY - birdVisibleFrame().minY)
+        }
+        // 房间上沿:从当前 x 直直飞到房间高处(鸟身顶贴近天花板),x 夹在左右墙内。
+        if case .roomRim(let home) = surface {
+            let bv = birdVisibleFrame()
+            var minX = home.minX + homePad - bv.minX
+            var maxX = home.maxX - homePad - bv.maxX
+            if maxX < minX { let c = (minX + maxX) / 2; minX = c; maxX = c }
+            let x = max(minX, min(window.frame.origin.x, maxX))
+            let y = home.maxY - homePad - bv.maxY
+            return CGPoint(x: x, y: y)
+        }
         // Surface frames are in AppKit coords (bottom-left origin).
         let frame = surface.frame
         let x = max(frame.minX, min(frame.midX - winSize.width / 2, frame.maxX - winSize.width))
@@ -676,7 +1026,60 @@ final class PetController: NSObject {
         return CGPoint(x: x, y: y)
     }
 
+    /// 返回离当前位置最近的平台(房间内有平台时用)
+    private func nearestPlatform() -> Platform? {
+        guard let home = homeFrame, !platforms.isEmpty else { return nil }
+        let birdCenterX = window.frame.origin.x + winSize.width / 2
+        let birdCenterY = window.frame.origin.y + feetY
+        let normBird = CGPoint(x: (birdCenterX - home.minX) / home.width,
+                               y: (birdCenterY - home.minY) / home.height)
+        var nearest: Platform?
+        var minDist = CGFloat.infinity
+        for plat in platforms {
+            let closest = plat.closestPoint(to: normBird)
+            let dist = hypot(closest.x - normBird.x, closest.y - normBird.y)
+            if dist < minDist {
+                minDist = dist
+                nearest = plat
+            }
+        }
+        return nearest
+    }
+
+    /// 平台在鸟中心 x(屏幕 px)处对应的窗口 origin.y(让鸟可见底踩在斜面上);
+    /// x 超出线段范围返回 nil。
+    private func platformOriginY(_ plat: Platform, birdCenterX cx: CGFloat) -> CGFloat? {
+        guard let home = homeFrame else { return nil }
+        let (s, e) = plat.absolute(in: home)
+        let minX = min(s.x, e.x), maxX = max(s.x, e.x)
+        guard cx >= minX - 1, cx <= maxX + 1 else { return nil }
+        let dx = e.x - s.x
+        let lineY: CGFloat
+        if abs(dx) < 1e-6 { lineY = max(s.y, e.y) }     // 垂直线段:用顶端
+        else { lineY = s.y + (cx - s.x) / dx * (e.y - s.y) }
+        return lineY - birdVisibleFrame().minY
+    }
+
+    /// 平台两端对应的窗口 origin.x 范围(供沿平台走动/折返时夹住,不走出平台)。
+    private func platformOriginXRange(_ plat: Platform) -> (min: CGFloat, max: CGFloat)? {
+        guard let home = homeFrame else { return nil }
+        let (s, e) = plat.absolute(in: home)
+        return (min(s.x, e.x) - winSize.width / 2, max(s.x, e.x) - winSize.width / 2)
+    }
+
     private func becomePerched() {
+        // 飞到平台:站上去(.idle),可在上面走动/折返,而不是静止 perch。
+        if case .platform = supportSurface {
+            bird.setViewDirection(.front)
+            bird.position.y = feetY
+            bird.yScale = 0.9
+            bird.run(.scaleY(to: 1.0, duration: 0.2))
+            let completion = perchCompletion
+            perchCompletion = nil
+            transition(to: .idle)
+            completion?()
+            return
+        }
         transition(to: .perch)
         bird.setViewDirection(.front)
         bird.yScale = 0.9
@@ -797,7 +1200,10 @@ final class PetController: NSObject {
         perchCompletion = nil
         transition(to: .dragged)
         bird.setViewDirection(.front)
-        dragSamples = [(NSEvent.mouseLocation, Date().timeIntervalSince1970)]
+        let m = NSEvent.mouseLocation
+        // 记下抓取点相对窗口原点的偏移,拖拽时保持它 → 鸟跟着光标走,不在起手瞬移。
+        dragGrabOffset = CGPoint(x: m.x - window.frame.origin.x, y: m.y - window.frame.origin.y)
+        dragSamples = [(m, Date().timeIntervalSince1970)]
         bird.setEyesClosed(false)
         // struggle wiggle
         bird.run(.repeatForever(.sequence([
@@ -808,7 +1214,14 @@ final class PetController: NSObject {
     }
 
     func dragMoved(to loc: CGPoint) {
-        window.setFrameOrigin(CGPoint(x: loc.x - winSize.width / 2, y: loc.y - winSize.height / 2 - 20))
+        var origin = CGPoint(x: loc.x - dragGrabOffset.x, y: loc.y - dragGrabOffset.y)
+        // 房间里拖拽:夹在四壁内,不让咕咕被拖出边界。
+        if isInHome {
+            let world = currentWorld
+            origin.x = max(world.minX, min(origin.x, world.maxX))
+            origin.y = max(world.groundY, min(origin.y, world.ceilingY))
+        }
+        window.setFrameOrigin(origin)
         dragSamples.append((loc, Date().timeIntervalSince1970))
         if dragSamples.count > 6 { dragSamples.removeFirst() }
         bubble.follow(petWindow: window)
@@ -817,7 +1230,9 @@ final class PetController: NSObject {
     func dragEnded() {
         bird.removeAction(forKey: "struggle")
         bird.zRotation = 0
-        fallFromDrag = true
+        // 松手后靠重力落下:桌面落到地面、房间里落到房间地板(撞墙反弹)。
+        // 房间里是"丢着玩",不算被丢出去(不触发 thrown)。
+        fallFromDrag = !isInHome
         // velocity from recent samples
         if dragSamples.count >= 2 {
             let a = dragSamples.first!, b = dragSamples.last!
