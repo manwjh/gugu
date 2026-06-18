@@ -248,7 +248,7 @@ final class PetController: NSObject {
                 land()
             }
             // 房间里被往上丢:撞天花板回弹,不飞出房间
-            if homeFrame != nil && origin.y > world.ceilingY {
+            if isInHome && origin.y > world.ceilingY {
                 origin.y = world.ceilingY
                 if vel.dy > 0 { vel.dy = -vel.dy * 0.4 }
             }
@@ -462,40 +462,26 @@ final class PetController: NSObject {
     /// 检测:从上一帧到这一帧,窗口中心点穿过了某条线段,且速度向下(vel.dy < 0)。
     private func checkPlatformLanding(at origin: CGPoint, vel: CGVector) -> (platformId: UUID, landingOrigin: CGPoint)? {
         guard let home = homeFrame, vel.dy < 0 else { return nil }
+        // 全程用屏幕绝对坐标(经 Platform.absolute),省掉归一化来回换算;
         // 落点参照鸟"可见底"(与房间地板一致),而非 feetY 锚点,否则脚会穿到线下面。
         let bvMinY = birdVisibleFrame().minY
-        let birdCenterX = origin.x + winSize.width / 2
-        let birdCenterY = origin.y + feetY
-        let normBird = CGPoint(x: (birdCenterX - home.minX) / home.width,
-                               y: (birdCenterY - home.minY) / home.height)
-        // 上一帧位置(粗略:当前 - 速度*dt,dt≈1/60)
-        let dt: CGFloat = 1.0 / 60.0
-        let prevCenterY = birdCenterY - vel.dy * dt
-        let normPrev = CGPoint(x: normBird.x, y: (prevCenterY - home.minY) / home.height)
-
+        let cx = origin.x + winSize.width / 2
+        let curY = origin.y + feetY
+        let prevY = curY - vel.dy / 60.0            // 上一帧 y(dt≈1/60)
         for plat in platforms {
-            // 线段 y 范围
-            let segMinY = min(plat.start.y, plat.end.y)
-            let segMaxY = max(plat.start.y, plat.end.y)
-            // 穿过判断:上一帧在线段上方,这一帧在线段下方或上,且横向在线段 x 范围内
-            guard normPrev.y >= segMinY, normBird.y <= segMaxY else { continue }
-            // 计算线段在 normBird.x 处的 y 值(线性插值)
-            let dx = plat.end.x - plat.start.x
-            if abs(dx) < 1e-6 {
-                // 垂直线段(x 相同):只要 x 匹配就算穿过
-                if abs(normBird.x - plat.start.x) < 0.01 {
-                    let landY = home.minY + segMaxY * home.height - bvMinY
-                    return (plat.id, CGPoint(x: origin.x, y: landY))
-                }
-                continue
+            let (s, e) = plat.absolute(in: home)
+            // 这一帧落到线段 y 区间内,且确有"自上而下穿过"的趋势
+            guard prevY >= min(s.y, e.y), curY <= max(s.y, e.y) else { continue }
+            let dx = e.x - s.x
+            if abs(dx) < 1e-6 {                      // 垂直线段:x 命中即落到顶端
+                guard abs(cx - s.x) < home.width * 0.01 else { continue }
+                return (plat.id, CGPoint(x: origin.x, y: max(s.y, e.y) - bvMinY))
             }
-            let t = (normBird.x - plat.start.x) / dx
-            guard t >= 0, t <= 1 else { continue }  // 不在线段 x 范围内
-            let segY = plat.start.y + t * (plat.end.y - plat.start.y)
-            // 穿过:上一帧 >= segY,这一帧 <= segY
-            if normPrev.y >= segY && normBird.y <= segY {
-                let landY = home.minY + segY * home.height - bvMinY
-                return (plat.id, CGPoint(x: origin.x, y: landY))
+            let t = (cx - s.x) / dx
+            guard t >= 0, t <= 1 else { continue }   // 不在线段横向范围内
+            let lineY = s.y + t * (e.y - s.y)
+            if prevY >= lineY && curY <= lineY {
+                return (plat.id, CGPoint(x: origin.x, y: lineY - bvMinY))
             }
         }
         return nil
@@ -893,7 +879,7 @@ final class PetController: NSObject {
         bird.yScale = growthScale
         bird.startIdleAnimations()
         // 在小窝里醒来:贴回地板/墙内,回到 idle 站立,由 idle 循环决定下一步。
-        if homeFrame != nil, !(supportSurface?.isRoomRim ?? false) {
+        if isInHome, !(supportSurface?.isRoomRim ?? false) {
             let world = currentWorld
             var o = window.frame.origin
             o.x = max(world.minX, min(o.x, world.maxX))
