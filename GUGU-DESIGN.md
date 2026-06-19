@@ -541,31 +541,37 @@ stages:
 
 ### 11.2 模块划分(实际目录)
 
-分层(依赖只向下):`Core(基础设施) ← Kernel(领域基础) ← 功能层 ← App`。
-当前仍是单一 SwiftPM target,目录边界靠纪律而非编译器强制(见路线图)。
+**两个 SwiftPM target**,分层边界由编译器强制:`GuguKernel(基础层) ← gugu(功能层 + App)`。
+GuguKernel 是独立 library target,结构上无法 import 任何功能模块——反向依赖在编译期即被拒。
+跨边界符号用 `package` 访问级(仅包内可见,不对外暴露为公开 API)。
 
 ```
-Sources/Gugu/
-├── Core/        Config · ConfigWriter · Paths · Strings(L) · ProgressState   ← 基础设施
-├── Kernel/      PetState · Memory · GrowthStage · WorkRhythm · Audit(record) ← 领域基础(被各层向下依赖)
-├── Body/        BirdNode(绘制) · PetController(物理/状态机) · SpeechBubble · PlatformPhysics · WindowInfo · Render
-├── Senses/      RhythmSensor · ScreenSensor(Sensors) · VisionSensor · Perception · Listener · Voice · EventBus
-├── Affect/      Affect(情感标量)
-├── Brain/       Brain · Scheduler · AnthropicClient/OpenAIClient(LLMClient) · DreamBatchStore · Discovery · Milestones · *Parser
-├── Evolution/   Evolution · ProposalEngine · SnapshotStore · AuditReport(Audit.report 扩展)
-├── Moves/       MetaAction · MoveInterpreter · MoveLibrary(数据化动作)
-├── Home/        HomeController · HomeWindow · Platform(小窝)
-├── Budget/      Budget(计量/熔断/降档)
-├── Tools/       LocalToolExecutor · LocalNotifier
-├── Autonomy/    AutonomyTaskQueue
-├── Console/     Console(菜单栏) · ChatWindowController · ProposalApprovalCoordinator · ActionGridView · SettingsWindow
-├── SelfTest.swift   离线/在线自测
-└── main.swift       组合根:senses → affect → scheduler → brain → body
+Sources/
+├── GuguKernel/   ← 独立 library target(基础设施 + 领域基础),不依赖任何功能模块
+│   ├── Config · ConfigWriter · Paths · Strings(L)        基础设施
+│   ├── PetState · Memory · ProgressState                 领域状态
+│   └── GrowthStage · WorkRhythm · Audit(record) · EventBus · Perception
+│
+└── Gugu/         ← 可执行 target,依赖 GuguKernel
+    ├── Body/        BirdNode · PetController · MoveInterpreter · SpeechBubble · PlatformPhysics · WindowInfo · Render
+    ├── Senses/      RhythmSensor · ScreenSensor · VisionSensor · VisionTypes/Recognizer/FrameGate · VideoUnderstandingTracker · Listener · Voice
+    ├── Affect/      Affect(情感标量)
+    ├── Brain/       Brain · Scheduler · AnthropicClient/OpenAIClient(LLMClient) · DreamBatchStore · Discovery · Milestones · *Parser
+    ├── Evolution/   Evolution · ProposalEngine · SnapshotStore · AuditReport(Audit.report 扩展)
+    ├── Moves/       MetaAction · MoveLibrary(纯数据层:校验 + 存储,不碰 Body)
+    ├── Home/        HomeController · HomeWindow · Platform(小窝)
+    ├── Budget/      Budget(计量/熔断/降档)
+    ├── Tools/       LocalToolExecutor · LocalNotifier
+    ├── Autonomy/    AutonomyTaskQueue
+    ├── Console/     Console(菜单栏) · ChatWindowController · ProposalApprovalCoordinator · ActionGridView · SettingsWindow
+    ├── SelfTest.swift   离线/在线自测
+    └── main.swift       组合根:senses → affect → scheduler → brain → body
 ```
 
-> 演进说明:`Memory`/`PetState`/`GrowthStage`/`WorkRhythm` 与 `Audit.record` 原散落在
-> Brain/Evolution/Senses,现下沉到 `Kernel/`,打断了 Brain↔Evolution 的双向依赖环;
-> `Audit` 拆为 record(Kernel,纯写日志)/ report(Evolution,需读 proposals)。
+> 已断的依赖环:`Brain↔Evolution`(领域类型下沉 Kernel)、`Body↔Moves`(MoveInterpreter
+> 这一"数据→动画"执行层归入 Body,Moves 只剩数据层)。EventBus/Perception 作为跨层共享
+> 设施已入 Kernel。`Audit` 拆为 record(Kernel,纯写日志)/ report(Evolution,需读 proposals)。
+
 
 
 ### 11.3 命令行入口
