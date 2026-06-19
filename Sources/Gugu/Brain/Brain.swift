@@ -89,7 +89,7 @@ final class Brain {
         """
         本机能力状态:
         - 摄像头感知:代码已实现,但必须由主人在菜单栏开启并通过系统授权才会工作。当前\(cameraEnabled ? "已开启" : "未开启")。开启时你可以通过本机算法知道主人是否在座位、是否在笑、是否显得惊讶或困倦,以及挥手、手掌、点赞、OK、指向等少量手势;还会用最近几秒的本机结构化轨迹理解主人靠近/离远/左右移动、手靠近镜头等视频事件;不会保存或上传图像。
-        - 本地物品识别:用系统内置识别(无需安装模型),在摄像头开启时可低置信度地"好像看见"猫、狗,以及杯子、手机、键盘、书等少量常见物品,并通过短窗口轨迹判断出现/消失/移动。只在本机分析,不保存或上传图像;没真看到时不要硬说看见了具体东西。
+        - 本地物品识别:用系统内置识别,摄像头开启时可低置信度地"好像看见"猫、狗;若装了本地物品检测模型,还能认杯子、手机、键盘、书、瓶子等常见物品(当前\(localObjectRecognitionAvailable ? "检测模型已装" : "检测模型未装,只认猫狗")),并通过短窗口轨迹判断出现/消失/移动。只在本机分析,不保存或上传图像;没真看到时不要硬说看见了具体东西。
         - 语音识别:代码已实现,但必须由主人开启麦克风监听并通过系统授权才会工作。当前\(listeningEnabled ? "已开启" : "未开启")。它只处理唤醒词后的简短指令。
         - 本地朗读:代码已实现,但必须由主人开启朗读才会出声。当前\(voiceEnabled ? "已开启" : "未开启")。
         回答能力问题时要诚实区分“项目支持/当前开启/系统授权/模型是否安装/你此刻实际观察到什么”,不要说自己没有这些本机能力,也不要假装看到了具体画面、具体物品或听到了未提供的内容。
@@ -344,7 +344,7 @@ final class Brain {
         "properties": [
             "op": ["type": "string",
                    "enum": MetaOp.allCases.map { $0.rawValue },
-                   "description": "身体基元。move=平移 rotate=旋转(弧度) scale=挤压拉伸 flap=扑翅 hop=蹦 wait=停顿 say=说一句 view=朝向 tilt=歪头 blush=脸红 peck=啄 groom=理毛"],
+                   "description": "身体基元。move=平移 rotate=旋转(弧度) scale=挤压拉伸 flap=扑翅 hop=蹦 wait=停顿 say=说一句 view=朝向 tilt=歪头 blush=脸红 peck=啄 groom=理毛 manpu=冒情绪符号"],
             "dx": ["type": "number", "description": "move:水平位移(点,±120内)"],
             "dy": ["type": "number", "description": "move:垂直位移(点,±120内)"],
             "by": ["type": "number", "description": "rotate:旋转弧度(一圈=6.283)"],
@@ -357,6 +357,8 @@ final class Brain {
             "text": ["type": "string", "description": "say:要说的短话(≤24字)"],
             "dir": ["type": "string", "enum": ["front", "back", "side"], "description": "view:朝向"],
             "on": ["type": "boolean", "description": "tilt/blush:开或关"],
+            "kind": ["type": "string", "enum": Array(MoveLimits.validManpu).sorted(),
+                     "description": "manpu:情绪符号(sweat汗 anger怒 surprise惊 love心 music音符 question问号 dizzy晕)"],
         ],
         "required": ["op"],
         "additionalProperties": false,
@@ -394,7 +396,7 @@ final class Brain {
             : "Output strictly one JSON object. \"steps\" must be an array whose every element is an object containing an \"op\" field, with optional params. Available ops and params:"
         return """
         \(intro)
-        move(dx,dy,dur) rotate(by,dur) scale(x,y,dur) flap(times,fast) hop(height,dur) wait(dur) say(text) view(dir) tilt(on) blush(on) peck groom
+        move(dx,dy,dur) rotate(by,dur) scale(x,y,dur) flap(times,fast) hop(height,dur) wait(dur) say(text) view(dir) tilt(on) blush(on) peck groom manpu(kind)
 
         \(L.current == .zh ? "示例" : "Example"):
         {"name":"招手","trigger":"招手","feasible":true,"steps":[{"op":"view","dir":"front"},{"op":"flap","times":2,"fast":true},{"op":"wait","dur":0.3},{"op":"flap","times":2,"fast":true},{"op":"say","text":"嗨"}]}

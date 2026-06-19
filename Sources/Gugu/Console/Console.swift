@@ -61,6 +61,10 @@ final class Console: NSObject, NSWindowDelegate {
         menu.addItem(.separator())
         let camItem = makeItem(visionToggleTitle(), #selector(toggleCamera), "", icon: app?.visionSensor.enabled == true ? "eye.slash" : "eye")
         menu.addItem(camItem)
+        if app?.visionSensor.enabled == true {
+            let dbgTitle = app?.visionDebug?.isOpen == true ? L.menuVisionDebugClose : L.menuVisionDebug
+            menu.addItem(makeItem(dbgTitle, #selector(toggleVisionDebug), "", icon: "ladybug"))
+        }
         menu.addItem(makeItem(voiceToggleTitle(), #selector(toggleVoice), "", icon: app?.voice.enabled == true ? "speaker.slash" : "speaker.wave.2"))
         menu.addItem(makeItem(listenToggleTitle(), #selector(toggleListen), "", icon: app?.listener.enabled == true ? "mic.slash" : "mic"))
         menu.addItem(makeItem(L.menuAudit, #selector(openAudit), "", icon: "doc.text.magnifyingglass"))
@@ -141,6 +145,10 @@ final class Console: NSObject, NSWindowDelegate {
         menu.addItem(.separator())
         let camItem = makeItem(visionToggleTitle(), #selector(toggleCamera), "", icon: app?.visionSensor.enabled == true ? "eye.slash" : "eye")
         menu.addItem(camItem)
+        if app?.visionSensor.enabled == true {
+            let dbgTitle = app?.visionDebug?.isOpen == true ? L.menuVisionDebugClose : L.menuVisionDebug
+            menu.addItem(makeItem(dbgTitle, #selector(toggleVisionDebug), "", icon: "ladybug"))
+        }
         menu.addItem(makeItem(voiceToggleTitle(), #selector(toggleVoice), "", icon: app?.voice.enabled == true ? "speaker.slash" : "speaker.wave.2"))
         menu.addItem(makeItem(listenToggleTitle(), #selector(toggleListen), "", icon: app?.listener.enabled == true ? "mic.slash" : "mic"))
         menu.addItem(.separator())
@@ -202,6 +210,8 @@ final class Console: NSObject, NSWindowDelegate {
     @objc func pokePet() { app?.pet.poked() }
 
     @objc func toggleHome() { app?.toggleHome() }
+
+    @objc func toggleVisionDebug() { app?.toggleVisionDebug() }
 
     @objc func showAbilities() {
         app?.pet.say(L.abilitiesSpeech)

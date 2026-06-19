@@ -17,6 +17,7 @@ final class GuguApp: NSObject, NSApplicationDelegate {
     var listener: Listener!
     var scheduler: Scheduler!
     var console: Console!
+    var visionDebug: VisionDebugWindow!
     private var minuteTimer: Timer?
 
     /// 本次会话是否已经吐过一条引导提示(每次启动至多一条,避免话痨)。
@@ -46,6 +47,7 @@ final class GuguApp: NSObject, NSApplicationDelegate {
         home.onFrameChange = { [weak self] frame in self?.pet.updateHomeFrame(frame) }
         home.onPlatformsChange = { [weak self] platforms in self?.pet.updatePlatforms(platforms) }
         console = Console(app: self)
+        visionDebug = VisionDebugWindow()
         pet.onStateChange = { [weak self] _ in
             self?.console.refreshMenu()
         }
@@ -267,6 +269,13 @@ final class GuguApp: NSObject, NSApplicationDelegate {
             }
             EventBus.shared.post(kind: event.eventKind, summary: event.summary(label: label), weight: weight)
         }
+        visionSensor.onDebug = { [weak self] d in self?.visionDebug.update(d) }
+    }
+
+    /// 打开/关闭视觉调试窗口(实时看摄像头的原始识别数值)。
+    func toggleVisionDebug() {
+        visionDebug.toggle()
+        console.refreshMenu()
     }
 
     /// 语音指令(听到"咕咕"后那一句)→ 和打字聊天同一条对话链路。
@@ -513,7 +522,7 @@ final class GuguApp: NSObject, NSApplicationDelegate {
     func localCapabilitiesContext() -> String {
         Brain.localCapabilitiesContext(
             cameraEnabled: visionSensor.enabled,
-            localObjectRecognitionAvailable: visionSensor.objectRecognitionAvailable,
+            localObjectRecognitionAvailable: visionSensor.objectModelLoaded,
             listeningEnabled: listener.enabled,
             voiceEnabled: voice.enabled
         )
@@ -573,6 +582,21 @@ if args.contains("--selftest") {
 } else if args.contains("--audit-report") {
     MainActor.assumeIsolated {
         print(Audit.report().path)
+        exit(0)
+    }
+} else if let idx = args.firstIndex(of: "--detect"), idx + 1 < args.count {
+    // 离线检测测试:对一张图片跑物品识别,打印标签/置信度/中文映射。
+    let path = args[idx + 1]
+    MainActor.assumeIsolated {
+        let r = VisionSensor.debugDetect(imagePath: path)
+        print("模型已加载: \(r.loaded)")
+        if r.results.isEmpty {
+            print("(没有检测到目标)")
+        } else {
+            for item in r.results {
+                print(String(format: "  %@  %.2f  → %@", item.label, item.conf, item.zh ?? "(未映射)"))
+            }
+        }
         exit(0)
     }
 } else if let idx = args.firstIndex(of: "--restore-latest"), idx + 1 < args.count {

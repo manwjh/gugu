@@ -21,6 +21,14 @@ for key in NSCameraUsageDescription NSMicrophoneUsageDescription NSSpeechRecogni
 done
 
 # ad-hoc 签名(让 TCC 能稳定记住授权)
+# 物品检测模型(可选):若 models 目录里有,打进包让 .app 自洽。Gugu.app 已被 .gitignore,
+# 不会把这个 AGPL 模型提交进仓库。
+MODEL="$HOME/Library/Application Support/Gugu/models/gugu-objects.mlpackage"
+if [ -d "$MODEL" ]; then
+  cp -R "$MODEL" "$APP/Contents/Resources/gugu-objects.mlpackage"
+  echo "已打包物品检测模型"
+fi
+
 codesign --force --deep --sign - "$APP"
 codesign --verify --deep --strict "$APP"
 

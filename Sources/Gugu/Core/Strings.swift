@@ -34,6 +34,8 @@ enum L {
     static var menuPoke: String { s("戳一下", "Poke") }
     static var menuHome: String { s("进入小窝", "Open Home") }
     static var menuHomeClose: String { s("离开小窝", "Close Home") }
+    static var menuVisionDebug: String { s("视觉调试窗口", "Vision debug panel") }
+    static var menuVisionDebugClose: String { s("关闭视觉调试", "Close vision debug") }
     static var homeHint: String { s("点左上角的画笔,画条线，我就能站上去啦~",
                                     "Tap the pencil top-left and draw a line — I can stand on it!") }
     static var menuHeartbeatDebug: String { s("心跳一次(调试)", "Heartbeat (debug)") }

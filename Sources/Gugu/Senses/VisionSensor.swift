@@ -1,6 +1,8 @@
 import Foundation
 @preconcurrency import AVFoundation
 import Vision
+import CoreML
+import ImageIO
 
 enum VisionExpression: String {
     case smile, surprised, sleepy
@@ -53,27 +55,38 @@ struct VisionObjectObservation: Hashable {
         concreteLabel(label) ?? label
     }
 
-    /// 把内置分类器的英文标识符映射成我们关心的"具体物品"中文名;不认得返回 nil。
-    /// 用模糊包含匹配,容忍内置分类法里 cup/coffee_cup/mug 这类同义变体。
+    /// 把检测/分类标识符映射成我们关心的"具体物品"中文名;不认得返回 nil。
+    /// 模糊包含匹配,兼容 COCO 名(如 "cell phone" 带空格)与同义变体。
     static func concreteLabel(_ identifier: String) -> String? {
         let id = identifier.lowercased()
         func has(_ keys: String...) -> Bool { keys.contains { id.contains($0) } }
         if has("cat") { return "猫" }
         if has("dog", "puppy") { return "狗" }
-        if has("cup", "mug", "coffee") { return "杯子" }
-        if has("telephone", "cellphone", "smartphone", "mobile phone") || id == "phone" { return "手机" }
-        if has("laptop", "notebook computer", "notebook_computer") { return "笔记本电脑" }
+        if has("bird") { return "鸟" }
+        if has("phone") { return "手机" }                 // cell phone / telephone / smartphone
+        if has("laptop", "notebook computer") { return "笔记本电脑" }
         if has("keyboard") { return "键盘" }
+        if has("remote") { return "遥控器" }
+        if id == "tv" || has("television", "monitor") { return "屏幕" }
         if id.contains("mouse") && !id.contains("mousepad") { return "鼠标" }
-        if has("book") { return "书" }
+        if has("wine glass") { return "酒杯" }
+        if has("cup", "mug", "coffee") { return "杯子" }
         if has("bottle", "flask", "thermos") { return "瓶子" }
+        if has("bowl") { return "碗" }
+        if has("fork", "knife", "spoon") { return "餐具" }
+        if has("book") { return "书" }
+        if has("scissors") { return "剪刀" }
+        if has("toothbrush") { return "牙刷" }
+        if has("clock", "watch") { return "钟表" }
+        if has("vase") { return "花瓶" }
         if has("houseplant", "potted plant", "flower", "plant") { return "植物" }
         if has("spectacle", "eyeglass", "sunglass", "eyewear") || id == "glasses" { return "眼镜" }
         if has("headphone", "earphone", "headset") { return "耳机" }
         if has("teddy", "plush", "stuffed") { return "玩偶" }
         if has("banana") { return "香蕉" }
+        if has("orange") && !has("orangutan") { return "橙子" }
         if id.contains("apple") && !id.contains("pineapple") { return "苹果" }
-        if has("hat", "cap ", "beanie") { return "帽子" }
+        if has("hat", "beanie") { return "帽子" }
         return nil
     }
 }
@@ -105,6 +118,22 @@ enum VisionStartOutcome {
     case denied      // 系统权限被拒/受限
     case noDevice    // 找不到摄像头
     case failed      // 会话配置失败
+}
+
+/// 每帧的视觉原始数值快照,喂给调试窗口实时显示,避免"盲调"阈值。
+struct VisionDebug {
+    var facePresent = false
+    var mouthWH: CGFloat = 0
+    var cornerUpturn: CGFloat = 0
+    var eyeL: CGFloat = 0
+    var eyeR: CGFloat = 0
+    var expressions: [String] = []        // 本帧检测到(去抖前)
+    var gesture: String = "—"             // 本帧原始手型
+    var fingers: [Bool] = []              // 食/中/无名/小
+    var palmSamples = 0                   // 挥手轨迹缓冲帧数
+    var objects: [(label: String, conf: Float)] = []
+    var lowPower = false
+    var modelLoaded = false
 }
 
 /// Optional camera sense. PRIVACY: frames are analyzed locally and discarded
@@ -139,9 +168,31 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
     var onGesture: ((VisionGesture) -> Void)?
     var onObject: ((VisionObjectObservation) -> Void)?
     var onVideoEvent: ((VideoUnderstandingEvent, String?) -> Void)?
+    var onDebug: ((VisionDebug) -> Void)?   // 每帧原始数值 → 调试窗口
 
     var objectRecognitionAvailable: Bool {
         objectRecognizer.available
+    }
+
+    /// 是否加载了主人放置的物品检测模型(决定能否认猫狗以外的物品)。
+    var objectModelLoaded: Bool {
+        objectRecognizer.modelLoaded
+    }
+
+    /// 离线测试:对一张图片跑物品识别,返回 (原始标签, 置信度, 中文映射)。
+    /// 供 `--detect <image>` 用,免摄像头即可端到端验证检测模型。
+    static func debugDetect(imagePath: String) -> (loaded: Bool, results: [(label: String, conf: Float, zh: String?)]) {
+        let rec = BuiltInRecognizer()
+        let url = URL(fileURLWithPath: imagePath)
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let cg = CGImageSourceCreateImageAtIndex(src, 0, nil) else {
+            return (rec.modelLoaded, [])
+        }
+        let reqs = rec.makeRequests()
+        let handler = VNImageRequestHandler(cgImage: cg, options: [:])
+        do { try handler.perform(reqs) } catch { return (rec.modelLoaded, []) }
+        let raw = rec.rawResults(from: reqs)
+        return (rec.modelLoaded, raw.map { ($0.label, $0.conf, VisionObjectObservation.concreteLabel($0.label)) })
     }
 
     /// Whether the user has authorized & enabled the camera sense.
@@ -290,9 +341,10 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         let handRequest = VNDetectHumanHandPoseRequest()
         handRequest.maximumHandCount = 2
         var requests: [VNRequest] = [faceRequest, handRequest]
-        // 物品识别是"重活",没必要每帧跑:最多 ~2Hz,省 CPU/电。
-        let runObjects = VisionPerformancePolicy.allowsObjectRecognition
-            && frameGate.allowObjectRun(minInterval: 0.5)
+        // 物品识别是"重活",按策略给的最小间隔限频;nil 表示当前完全不跑(关闭/过热)。
+        let runObjects = VisionPerformancePolicy.objectRecognitionInterval.map {
+            frameGate.allowObjectRun(minInterval: $0)
+        } ?? false
         let objectRequests = runObjects ? objectRecognizer.makeRequests() : []
         requests.append(contentsOf: objectRequests)
         let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .leftMirrored)
@@ -308,17 +360,21 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         let faceSignals = VisionSensor.faceSignals(from: faces.first)
         let handSignals = VisionSensor.handSignals(from: handObservations)
         let objects = (didPerform && runObjects) ? objectRecognizer.results(from: objectRequests) : []
+        // 原始(未过滤)标签——调试窗口用,能看到分类器到底"看见"了什么。
+        let rawObjects = (didPerform && runObjects) ? objectRecognizer.rawResults(from: objectRequests) : []
         if let stats = frameGate.recordFrame(objectFrame: runObjects) {
             Log.info("vision", stats)
         }
         // pixelBuffer goes out of scope here — nothing retained
         Task { @MainActor in
             guard self.frameGate.accepts(generation) else { return }
-            self.handle(face: faceSignals, hand: handSignals, objects: objects)
+            self.handle(face: faceSignals, hand: handSignals, objects: objects, rawObjects: rawObjects)
         }
     }
 
-    private func handle(face: FaceSignals, hand: HandSignals, objects: [VisionObjectObservation]) {
+    private func handle(face: FaceSignals, hand: HandSignals,
+                        objects: [VisionObjectObservation],
+                        rawObjects: [(label: String, conf: Float)] = []) {
         let now = Date()
 
         // 出现/离开:出现要灵敏,离开要"连续看不到几帧"才算,避免单帧丢脸造成闪烁。
@@ -362,6 +418,23 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         for event in videoTracker.ingest(face: face, hand: hand, objects: objects, now: now) {
             onVideoEvent?(event.kind, event.label)
         }
+
+        if let onDebug {
+            var dbg = VisionDebug()
+            dbg.facePresent = face.present
+            dbg.mouthWH = face.mouthWH
+            dbg.cornerUpturn = face.cornerUpturn
+            dbg.eyeL = face.eyeL
+            dbg.eyeR = face.eyeR
+            dbg.expressions = face.expressions.map(\.rawValue)
+            dbg.gesture = hand.gesture?.rawValue ?? "—"
+            dbg.fingers = hand.fingers
+            dbg.palmSamples = palmXHistory.count
+            dbg.objects = rawObjects
+            dbg.lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
+            dbg.modelLoaded = objectRecognizer.modelLoaded
+            onDebug(dbg)
+        }
     }
 
     private func resetTransientVisionState() {
@@ -377,25 +450,25 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
     }
 
     private func stableGesture(from hand: HandSignals, now: Date) -> VisionGesture? {
-        guard let gesture = hand.gesture else {
-            gestureCandidate = nil
-            gestureCandidateCount = 0
-            palmXHistory.removeAll()
-            return nil
-        }
-
-        // 挥手:张掌时手心来回摆(≥2 次方向反转 + 一定幅度),而不是横移一下就算。
-        if gesture == .openPalm, let center = hand.center {
+        // 挥手:只要手可见就记手心 x 轨迹(与具体手型无关——挥手时手型会抖),
+        // 检测来回摆动;否则手不见了才清空轨迹。
+        if let center = hand.center {
             palmXHistory.append((now, center.x))
-            palmXHistory.removeAll { now.timeIntervalSince($0.t) > 1.2 }
+            palmXHistory.removeAll { now.timeIntervalSince($0.t) > 1.5 }
             if VisionSensor.isWaving(palmXHistory) {
+                palmXHistory.removeAll()
                 gestureCandidate = nil
                 gestureCandidateCount = 0
-                palmXHistory.removeAll()
                 return .wave
             }
         } else {
             palmXHistory.removeAll()
+        }
+
+        guard let gesture = hand.gesture else {
+            gestureCandidate = nil
+            gestureCandidateCount = 0
+            return nil
         }
 
         if gestureCandidate == gesture {
@@ -404,19 +477,19 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
             gestureCandidate = gesture
             gestureCandidateCount = 1
         }
-        return gestureCandidateCount >= 3 ? gesture : nil   // 3 帧确认,更稳
+        return gestureCandidateCount >= 2 ? gesture : nil   // 2 帧确认
     }
 
     /// 手心 x 轨迹是否构成"挥手":来回摆动至少 2 次,且横向幅度够大。
     nonisolated private static func isWaving(_ history: [(t: Date, x: CGFloat)]) -> Bool {
         guard history.count >= 4 else { return false }
         let xs = history.map(\.x)
-        guard let mn = xs.min(), let mx = xs.max(), mx - mn > 0.12 else { return false }
+        guard let mn = xs.min(), let mx = xs.max(), mx - mn > 0.10 else { return false }
         var reversals = 0
         var lastSign = 0
         for i in 1..<xs.count {
             let d = xs[i] - xs[i - 1]
-            if abs(d) < 0.01 { continue }
+            if abs(d) < 0.008 { continue }
             let s = d > 0 ? 1 : -1
             if lastSign != 0, s != lastSign { reversals += 1 }
             lastSign = s
@@ -447,27 +520,36 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         var expressions: [VisionExpression]
         var center: CGPoint?
         var area: CGFloat?
+        // 调试用原始数值
+        var mouthWH: CGFloat = 0      // 嘴 宽/高
+        var cornerUpturn: CGFloat = 0 // 嘴角上扬(归一)
+        var eyeL: CGFloat = 0         // 左眼 高/宽
+        var eyeR: CGFloat = 0         // 右眼 高/宽
     }
 
     nonisolated fileprivate struct HandSignals {
         var gesture: VisionGesture?
         var center: CGPoint?
         var area: CGFloat?
+        var fingers: [Bool] = []      // 调试用:食/中/无名/小 是否伸直
     }
 
     nonisolated private static func faceSignals(from face: VNFaceObservation?) -> FaceSignals {
         guard let face else { return FaceSignals(present: false, expressions: []) }
         var expressions: [VisionExpression] = []
         let landmarks = face.landmarks
+        var mouthWH: CGFloat = 0, upturnDbg: CGFloat = 0, eyeLDbg: CGFloat = 0, eyeRDbg: CGFloat = 0
         if let mouth = landmarks?.outerLips,
            let metrics = landmarkMetrics(mouth.normalizedPoints) {
-            // 笑:嘴够宽 + 嘴角上扬(左右嘴角高于唇竖直中线),避免打哈欠/张嘴说话被当成笑。
-            if metrics.height > 0,
-               metrics.width / metrics.height > 2.8,
-               mouthCornersRaised(mouth.normalizedPoints) {
+            // 笑 vs 惊讶:以"嘴角上扬幅度"为主判据(张嘴笑也算),不再卡宽高比。
+            // upturn > 0 表示嘴角高于唇中线;笑时明显为正,惊讶/平张嘴时≈0 或为负。
+            let upturn = mouthCornerUpturn(mouth.normalizedPoints)
+            upturnDbg = upturn
+            mouthWH = metrics.height > 0 ? metrics.width / metrics.height : 0
+            if upturn > 0.035 {
                 expressions.append(.smile)
-            } else if metrics.width > 0, metrics.height / metrics.width > 0.34 {
-                expressions.append(.surprised)
+            } else if metrics.width > 0, metrics.height / metrics.width > 0.65 {
+                expressions.append(.surprised)   // 仅很圆很竖的"O"形嘴,且没在笑(进一步收紧)
             }
         }
         if let leftEye = landmarks?.leftEye,
@@ -475,15 +557,18 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
            let left = landmarkMetrics(leftEye.normalizedPoints),
            let right = landmarkMetrics(rightEye.normalizedPoints),
            left.width > 0,
-           right.width > 0,
-           left.height / left.width < 0.16,
-           right.height / right.width < 0.16 {
-            expressions.append(.sleepy)
+           right.width > 0 {
+            eyeLDbg = left.height / left.width
+            eyeRDbg = right.height / right.width
+            if eyeLDbg < 0.16, eyeRDbg < 0.16 {
+                expressions.append(.sleepy)
+            }
         }
         return FaceSignals(present: true,
                            expressions: expressions,
                            center: CGPoint(x: face.boundingBox.midX, y: face.boundingBox.midY),
-                           area: face.boundingBox.width * face.boundingBox.height)
+                           area: face.boundingBox.width * face.boundingBox.height,
+                           mouthWH: mouthWH, cornerUpturn: upturnDbg, eyeL: eyeLDbg, eyeR: eyeRDbg)
     }
 
     nonisolated private static func landmarkMetrics(_ points: [CGPoint]) -> (width: CGFloat, height: CGFloat)? {
@@ -494,15 +579,18 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         return (maxX - minX, maxY - minY)
     }
 
-    /// 嘴角是否上扬:左右最外侧点(嘴角)的平均高度 ≥ 唇竖直中线(Vision 归一化 y 向上)。
-    /// 微笑会把嘴角拉高;打哈欠/平张嘴时嘴角在中线附近或更低,可据此排除。
-    nonisolated private static func mouthCornersRaised(_ points: [CGPoint]) -> Bool {
+    /// 嘴角上扬幅度(按嘴宽归一):左右嘴角平均高度减去唇竖直中线,正值=上扬(笑)。
+    /// Vision 归一化坐标 y 向上,所以嘴角越高值越大。
+    nonisolated private static func mouthCornerUpturn(_ points: [CGPoint]) -> CGFloat {
         guard let left = points.min(by: { $0.x < $1.x }),
               let right = points.max(by: { $0.x < $1.x }),
+              let minX = points.map(\.x).min(),
+              let maxX = points.map(\.x).max(),
               let minY = points.map(\.y).min(),
-              let maxY = points.map(\.y).max() else { return false }
+              let maxY = points.map(\.y).max() else { return 0 }
         let midY = (minY + maxY) / 2
-        return (left.y + right.y) / 2 >= midY
+        let width = max(maxX - minX, 0.01)
+        return ((left.y + right.y) / 2 - midY) / width
     }
 
     nonisolated private static func handSignals(from observations: [VNHumanHandPoseObservation]) -> HandSignals {
@@ -529,25 +617,38 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         let allPoints = points.values.filter { $0.confidence >= minConfidence }.map(\.location)
         let handArea = boundingArea(allPoints)
         let palmSpan = max(0.05, hypot(indexTip.x - littleTip.x, indexTip.y - littleTip.y))
-        let indexExtended = distance(indexTip, wrist) > palmSpan * 1.35
-        let middleExtended = distance(middleTip, wrist) > palmSpan * 1.25
-        let ringExtended = distance(ringTip, wrist) > palmSpan * 1.15
-        let littleExtended = distance(littleTip, wrist) > palmSpan * 1.05
+        // 手指是否伸直:指尖比第二关节(PIP)离手腕更远 → 直;比掌跨参照更稳,握拳时不误判。
+        // PIP 缺失时回退到旧的掌跨比值法。
+        func extended(_ tip: CGPoint,
+                      _ pipName: VNHumanHandPoseObservation.JointName,
+                      fallback: CGFloat) -> Bool {
+            if let pip = point(pipName) {
+                return distance(tip, wrist) > distance(pip, wrist) * 1.08
+            }
+            return distance(tip, wrist) > palmSpan * fallback
+        }
+        let indexExtended = extended(indexTip, .indexPIP, fallback: 1.35)
+        let middleExtended = extended(middleTip, .middlePIP, fallback: 1.25)
+        let ringExtended = extended(ringTip, .ringPIP, fallback: 1.15)
+        let littleExtended = extended(littleTip, .littlePIP, fallback: 1.05)
+        let fingers = [indexExtended, middleExtended, ringExtended, littleExtended]
 
         if let thumbTip = point(.thumbTip), distance(thumbTip, indexTip) < palmSpan * 0.42 {
-            return HandSignals(gesture: .ok, center: center, area: handArea)
+            return HandSignals(gesture: .ok, center: center, area: handArea, fingers: fingers)
         }
         if indexExtended && middleExtended && ringExtended && littleExtended {
-            return HandSignals(gesture: .openPalm, center: center, area: handArea)
+            return HandSignals(gesture: .openPalm, center: center, area: handArea, fingers: fingers)
         }
         if indexExtended && !middleExtended && !ringExtended && !littleExtended {
-            return HandSignals(gesture: .pointing, center: center, area: handArea)
+            return HandSignals(gesture: .pointing, center: center, area: handArea, fingers: fingers)
         }
+        // 竖大拇指:其余手指基本握起 + 拇指明显在最上方。
         if let thumbTip = point(.thumbTip),
-           thumbTip.y > max(indexTip.y, middleTip.y, ringTip.y, littleTip.y) + 0.08 {
-            return HandSignals(gesture: .thumbsUp, center: center, area: handArea)
+           !middleExtended, !ringExtended, !littleExtended,
+           thumbTip.y > max(indexTip.y, middleTip.y, ringTip.y, littleTip.y) + 0.05 {
+            return HandSignals(gesture: .thumbsUp, center: center, area: handArea, fingers: fingers)
         }
-        return HandSignals(center: center, area: handArea)
+        return HandSignals(center: center, area: handArea, fingers: fingers)
     }
 
     nonisolated private static func distance(_ a: CGPoint, _ b: CGPoint) -> CGFloat {
@@ -644,18 +745,19 @@ private final class VisionFrameGate: @unchecked Sendable {
 }
 
 private enum VisionPerformancePolicy {
-    static var allowsObjectRecognition: Bool {
-        guard UserDefaults.standard.object(forKey: "gugu.vision.objects.enabled") == nil
-                || UserDefaults.standard.bool(forKey: "gugu.vision.objects.enabled") else {
-            return false
+    /// 物品识别的最小运行间隔(秒);返回 nil 表示当前完全不跑。
+    /// 用户显式关闭、或机器过热 → 停;低电量 → 不停,只降频(从 ~2Hz 降到 ~0.7Hz)。
+    static var objectRecognitionInterval: TimeInterval? {
+        if UserDefaults.standard.object(forKey: "gugu.vision.objects.enabled") != nil,
+           !UserDefaults.standard.bool(forKey: "gugu.vision.objects.enabled") {
+            return nil   // 主人显式关掉了
         }
         let info = ProcessInfo.processInfo
-        if info.isLowPowerModeEnabled { return false }
         switch info.thermalState {
         case .serious, .critical:
-            return false
+            return nil   // 过热才完全停
         default:
-            return true
+            return info.isLowPowerModeEnabled ? 1.5 : 0.5
         }
     }
 }
@@ -907,42 +1009,80 @@ private final class VideoUnderstandingTracker {
     }
 }
 
-/// 内置图像识别——**不需要任何模型文件**,纯本地、开箱即用、看完即弃。
-/// - VNRecognizeAnimalsRequest:内置识别猫/狗(对一只宠物鸟很搭)。
-/// - VNClassifyImageRequest:内置通用分类,只挑"具体物品"白名单里的几个,
-///   避免把 material/indoor 这类抽象标签也念出来。
+/// 本地物品识别。优先用主人放置的目标检测模型(YOLO 类,COCO 80 类,能认手持的杯子/手机/书…);
+/// 没有模型时退回系统内置的动物检测(只认猫/狗)。全部纯本地、看完即弃、不需要联网。
+/// 检测模型查找位置(任选其一,命名 gugu-objects):app 包 Resources 或 ~/.../Gugu/models/,
+/// 支持 .mlmodelc / .mlmodel / .mlpackage(后两者运行时自动编译)。
 private final class BuiltInRecognizer: @unchecked Sendable {
-    /// 内置识别始终可用(无需主人安装模型)。
+    private let detectionModel: VNCoreMLModel?
+
+    init() { detectionModel = BuiltInRecognizer.loadDetectionModel() }
+
     var available: Bool { true }
+    var modelLoaded: Bool { detectionModel != nil }
 
     func makeRequests() -> [VNRequest] {
-        [VNRecognizeAnimalsRequest(), VNClassifyImageRequest()]
+        if let detectionModel {
+            let r = VNCoreMLRequest(model: detectionModel)
+            r.imageCropAndScaleOption = .scaleFill   // 与 Ultralytics iOS 示例一致
+            return [r]
+        }
+        return [VNRecognizeAnimalsRequest()]         // 无模型:至少认猫/狗
     }
 
     func results(from requests: [VNRequest]) -> [VisionObjectObservation] {
         var out: [VisionObjectObservation] = []
         for req in requests {
-            if let animals = req.results as? [VNRecognizedObjectObservation] {
-                for obs in animals {
-                    guard let label = obs.labels.first, label.confidence >= 0.5 else { continue }
-                    out.append(VisionObjectObservation(
-                        label: label.identifier,
-                        confidence: label.confidence,
-                        center: CGPoint(x: obs.boundingBox.midX, y: obs.boundingBox.midY),
-                        area: obs.boundingBox.width * obs.boundingBox.height))
-                }
-            } else if let classes = req.results as? [VNClassificationObservation] {
-                // classify 会吐几百个标签,且置信度偏低;只保留"够自信 + 在具体物品白名单"
-                // 的前两个,并把置信度归一到能通过下游门槛(下游阈值是按高置信模型调的)。
-                let picked = classes
-                    .filter { $0.confidence >= 0.3 && VisionObjectObservation.concreteLabel($0.identifier) != nil }
-                    .prefix(2)
-                for obs in picked {
-                    out.append(VisionObjectObservation(label: obs.identifier,
-                                                       confidence: max(obs.confidence, 0.65)))
-                }
+            guard let objects = req.results as? [VNRecognizedObjectObservation] else { continue }
+            for obs in objects {
+                guard let label = obs.labels.first, label.confidence >= 0.35 else { continue }
+                // 只上报我们关心、且有中文名的具体物(过滤掉 person 等)。
+                guard VisionObjectObservation.concreteLabel(label.identifier) != nil else { continue }
+                out.append(VisionObjectObservation(
+                    label: label.identifier,
+                    confidence: label.confidence,
+                    center: CGPoint(x: obs.boundingBox.midX, y: obs.boundingBox.midY),
+                    area: obs.boundingBox.width * obs.boundingBox.height))
             }
         }
         return out
+    }
+
+    /// 调试用:未过滤的原始检测(含 person 等),按置信度取前几个,让调试窗口看到模型实际输出。
+    func rawResults(from requests: [VNRequest]) -> [(label: String, conf: Float)] {
+        var out: [(String, Float)] = []
+        for req in requests {
+            guard let objects = req.results as? [VNRecognizedObjectObservation] else { continue }
+            for obs in objects where obs.labels.first != nil {
+                out.append((obs.labels.first!.identifier, obs.labels.first!.confidence))
+            }
+        }
+        return out.sorted { $0.1 > $1.1 }.prefix(5).map { $0 }
+    }
+
+    private static func loadDetectionModel() -> VNCoreMLModel? {
+        let cfg = MLModelConfiguration()
+        cfg.computeUnits = .all
+        var candidates: [URL] = []
+        for ext in ["mlmodelc", "mlpackage", "mlmodel"] {
+            if let u = Bundle.main.url(forResource: "gugu-objects", withExtension: ext) { candidates.append(u) }
+            candidates.append(Paths.modelsDir.appendingPathComponent("gugu-objects.\(ext)"))
+        }
+        for url in candidates where FileManager.default.fileExists(atPath: url.path) {
+            do {
+                // .mlmodelc 直接加载;.mlpackage/.mlmodel 先编译。
+                let loadURL = url.pathExtension == "mlmodelc" ? url : try MLModel.compileModel(at: url)
+                let model = try MLModel(contentsOf: loadURL, configuration: cfg)
+                let vm = try VNCoreMLModel(for: model)
+                Log.info("vision", "物品检测模型已加载:\(url.lastPathComponent)")
+                Audit.record(kind: "vision.object_model", summary: "物品检测模型已加载",
+                             detail: ["file": url.lastPathComponent])
+                return vm
+            } catch {
+                Log.info("vision", "物品检测模型加载失败(\(url.lastPathComponent)):\(error)")
+            }
+        }
+        Log.info("vision", "未放置物品检测模型;只认猫/狗。放入 models/gugu-objects.mlpackage 可认更多物品")
+        return nil
     }
 }

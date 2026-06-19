@@ -695,6 +695,16 @@ func runOfflineSelfTest() {
                   "say=\(threwSay) dir=\(threwDir) name=\(threwName) clean=\(cleanName)")
         }
 
+        // manpu 基元:合法情绪符号通过,未知 kind 被挡(进化只能选已有符号,不能造新的)
+        do {
+            let good = (try? MetaActionValidator.validate(steps: [MoveStep(op: "manpu", kind: "love")])) ?? []
+            var threwBadKind = false
+            do { _ = try MetaActionValidator.validate(steps: [MoveStep(op: "manpu", kind: "explosion")]) }
+            catch { threwBadKind = true }
+            check("move.manpu", good.count == 1 && good[0].kind == "love" && threwBadKind,
+                  "good=\(good.count) threwBadKind=\(threwBadKind)")
+        }
+
         // MoveLibrary:出厂内置动作被播种,可加载、可按名/触发词查
         do {
             let lib = MoveLibrary.shared
