@@ -241,10 +241,8 @@ final class GuguApp: NSObject, NSApplicationDelegate {
             }
             EventBus.shared.post(kind: gesture.eventKind, summary: gesture.summary, weight: 16)
         }
-        visionSensor.onObject = { [weak self] object in
-            self?.pet.bird.showManpu(.question)   // 看到没见过的东西:好奇
-            EventBus.shared.post(kind: "object_seen", summary: object.summary, weight: 6)
-        }
+        // 物品:不再逐个常驻上报(背景里的笔记本/键盘会刷屏、稀释主人模型)。
+        // 改由下面 onVideoEvent 的"新出现/移动/消失"(新颖度)触发,只在变化时反应。
         visionSensor.onVideoEvent = { [weak self] event, label in
             guard let self else { return }
             switch event {
@@ -258,7 +256,19 @@ final class GuguApp: NSObject, NSApplicationDelegate {
                 break
             case .handReachedTowardCamera:
                 self.pet.bird.flapWings(times: 5, fast: true)
-            case .objectAppeared, .objectDisappeared, .objectMoved:
+            case .objectAppeared:
+                // 按"有意思程度"分级反应:动物→吃一惊、食物/杯子→啄、其它新东西→好奇。
+                let l = label ?? ""
+                if ["猫", "狗", "鸟"].contains(l) {
+                    self.pet.bird.showManpu(.surprise)
+                    self.pet.bird.tiltHead(true)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in self?.pet.bird.tiltHead(false) }
+                } else if ["杯子", "碗", "香蕉", "苹果", "橙子"].contains(l) {
+                    self.pet.bird.peckOnce()
+                } else {
+                    self.pet.bird.showManpu(.question)
+                }
+            case .objectDisappeared, .objectMoved:
                 break
             }
             let weight: Int
@@ -266,7 +276,12 @@ final class GuguApp: NSObject, NSApplicationDelegate {
             case .handReachedTowardCamera: weight = 18
             case .personApproached, .personMovedAway: weight = 12
             case .personMovedLeft, .personMovedRight: weight = 6
-            case .objectAppeared, .objectDisappeared, .objectMoved: weight = 8
+            case .objectAppeared:
+                let l = label ?? ""
+                if ["猫", "狗", "鸟"].contains(l) { weight = 16 }                       // 动物最有意思
+                else if ["杯子", "碗", "香蕉", "苹果", "橙子", "手机", "书"].contains(l) { weight = 11 }  // 手持常见物
+                else { weight = 8 }
+            case .objectDisappeared, .objectMoved: weight = 8
             }
             EventBus.shared.post(kind: event.eventKind, summary: event.summary(label: label), weight: weight)
         }
