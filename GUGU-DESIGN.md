@@ -541,21 +541,32 @@ stages:
 
 ### 11.2 模块划分(实际目录)
 
+分层(依赖只向下):`Core(基础设施) ← Kernel(领域基础) ← 功能层 ← App`。
+当前仍是单一 SwiftPM target,目录边界靠纪律而非编译器强制(见路线图)。
+
 ```
 Sources/Gugu/
-├── Body/        BirdNode(绘制) · PetController(物理/状态机) · Render(离屏)
-├── Senses/      RhythmSensor · ScreenSensor(Sensors) · VisionSensor · Listener · Voice · EventBus
+├── Core/        Config · ConfigWriter · Paths · Strings(L) · ProgressState   ← 基础设施
+├── Kernel/      PetState · Memory · GrowthStage · WorkRhythm · Audit(record) ← 领域基础(被各层向下依赖)
+├── Body/        BirdNode(绘制) · PetController(物理/状态机) · SpeechBubble · PlatformPhysics · WindowInfo · Render
+├── Senses/      RhythmSensor · ScreenSensor(Sensors) · VisionSensor · Perception · Listener · Voice · EventBus
 ├── Affect/      Affect(情感标量)
-├── Brain/       Brain · Scheduler · AnthropicClient · Memory · DreamBatchStore · LocalCommandParser
-├── Evolution/   Evolution · GrowthStage · ProposalEngine · SnapshotStore · Audit
+├── Brain/       Brain · Scheduler · AnthropicClient/OpenAIClient(LLMClient) · DreamBatchStore · Discovery · Milestones · *Parser
+├── Evolution/   Evolution · ProposalEngine · SnapshotStore · AuditReport(Audit.report 扩展)
+├── Moves/       MetaAction · MoveInterpreter · MoveLibrary(数据化动作)
+├── Home/        HomeController · HomeWindow · Platform(小窝)
 ├── Budget/      Budget(计量/熔断/降档)
 ├── Tools/       LocalToolExecutor · LocalNotifier
 ├── Autonomy/    AutonomyTaskQueue
-├── Core/        Config · Paths
-├── Console/     菜单栏 · 审计入口 · 调试触发
+├── Console/     Console(菜单栏) · ChatWindowController · ProposalApprovalCoordinator · ActionGridView · SettingsWindow
 ├── SelfTest.swift   离线/在线自测
 └── main.swift       组合根:senses → affect → scheduler → brain → body
 ```
+
+> 演进说明:`Memory`/`PetState`/`GrowthStage`/`WorkRhythm` 与 `Audit.record` 原散落在
+> Brain/Evolution/Senses,现下沉到 `Kernel/`,打断了 Brain↔Evolution 的双向依赖环;
+> `Audit` 拆为 record(Kernel,纯写日志)/ report(Evolution,需读 proposals)。
+
 
 ### 11.3 命令行入口
 
