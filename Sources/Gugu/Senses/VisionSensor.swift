@@ -134,6 +134,10 @@ struct VisionDebug {
     var objects: [(label: String, conf: Float)] = []
     var lowPower = false
     var modelLoaded = false
+    // 可视化用:归一化外框(Vision 坐标,原点左下)
+    var faceBox: CGRect?
+    var handBox: CGRect?
+    var objectBoxes: [(label: String, conf: Float, rect: CGRect)] = []
 }
 
 /// Optional camera sense. PRIVACY: frames are analyzed locally and discarded
@@ -177,6 +181,13 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
     /// 是否加载了主人放置的物品检测模型(决定能否认猫狗以外的物品)。
     var objectModelLoaded: Bool {
         objectRecognizer.modelLoaded
+    }
+
+    /// 给调试窗口用的本机实时预览层(绑定同一个会话)。只在本机显示,不录制不上传。
+    func makePreviewLayer() -> AVCaptureVideoPreviewLayer {
+        let layer = AVCaptureVideoPreviewLayer(session: session)
+        layer.videoGravity = .resizeAspect
+        return layer
     }
 
     /// 离线测试:对一张图片跑物品识别,返回 (原始标签, 置信度, 中文映射)。
@@ -347,7 +358,9 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         } ?? false
         let objectRequests = runObjects ? objectRecognizer.makeRequests() : []
         requests.append(contentsOf: objectRequests)
-        let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .leftMirrored)
+        // macOS 内置摄像头 buffer 本来就是直立的 → 用 .up,Vision 结果即直立坐标
+        // (x=水平、y=垂直),全管线一致,不需要任何手动转置。
+        let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up)
         let didPerform: Bool
         do {
             try handler.perform(requests)
@@ -374,7 +387,7 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
 
     private func handle(face: FaceSignals, hand: HandSignals,
                         objects: [VisionObjectObservation],
-                        rawObjects: [(label: String, conf: Float)] = []) {
+                        rawObjects: [(label: String, conf: Float, rect: CGRect)] = []) {
         let now = Date()
 
         // 出现/离开:出现要灵敏,离开要"连续看不到几帧"才算,避免单帧丢脸造成闪烁。
@@ -430,9 +443,12 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
             dbg.gesture = hand.gesture?.rawValue ?? "—"
             dbg.fingers = hand.fingers
             dbg.palmSamples = palmXHistory.count
-            dbg.objects = rawObjects
+            dbg.objects = rawObjects.map { ($0.label, $0.conf) }
             dbg.lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
             dbg.modelLoaded = objectRecognizer.modelLoaded
+            dbg.faceBox = face.present ? face.box : nil
+            dbg.handBox = hand.box
+            dbg.objectBoxes = rawObjects
             onDebug(dbg)
         }
     }
@@ -525,6 +541,7 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         var cornerUpturn: CGFloat = 0 // 嘴角上扬(归一)
         var eyeL: CGFloat = 0         // 左眼 高/宽
         var eyeR: CGFloat = 0         // 右眼 高/宽
+        var box: CGRect?              // 可视化:人脸归一化外框
     }
 
     nonisolated fileprivate struct HandSignals {
@@ -532,6 +549,7 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         var center: CGPoint?
         var area: CGFloat?
         var fingers: [Bool] = []      // 调试用:食/中/无名/小 是否伸直
+        var box: CGRect?              // 可视化:手归一化外框
     }
 
     nonisolated private static func faceSignals(from face: VNFaceObservation?) -> FaceSignals {
@@ -539,17 +557,14 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         var expressions: [VisionExpression] = []
         let landmarks = face.landmarks
         var mouthWH: CGFloat = 0, upturnDbg: CGFloat = 0, eyeLDbg: CGFloat = 0, eyeRDbg: CGFloat = 0
-        if let mouth = landmarks?.outerLips,
-           let metrics = landmarkMetrics(mouth.normalizedPoints) {
-            // 笑 vs 惊讶:以"嘴角上扬幅度"为主判据(张嘴笑也算),不再卡宽高比。
-            // upturn > 0 表示嘴角高于唇中线;笑时明显为正,惊讶/平张嘴时≈0 或为负。
+        if let mouth = landmarks?.outerLips, let metrics = landmarkMetrics(mouth.normalizedPoints) {
             let upturn = mouthCornerUpturn(mouth.normalizedPoints)
             upturnDbg = upturn
             mouthWH = metrics.height > 0 ? metrics.width / metrics.height : 0
             if upturn > 0.035 {
                 expressions.append(.smile)
             } else if metrics.width > 0, metrics.height / metrics.width > 0.65 {
-                expressions.append(.surprised)   // 仅很圆很竖的"O"形嘴,且没在笑(进一步收紧)
+                expressions.append(.surprised)   // 仅很圆很竖的"O"形嘴,且没在笑
             }
         }
         if let leftEye = landmarks?.leftEye,
@@ -568,7 +583,8 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
                            expressions: expressions,
                            center: CGPoint(x: face.boundingBox.midX, y: face.boundingBox.midY),
                            area: face.boundingBox.width * face.boundingBox.height,
-                           mouthWH: mouthWH, cornerUpturn: upturnDbg, eyeL: eyeLDbg, eyeR: eyeRDbg)
+                           mouthWH: mouthWH, cornerUpturn: upturnDbg, eyeL: eyeLDbg, eyeR: eyeRDbg,
+                           box: face.boundingBox)
     }
 
     nonisolated private static func landmarkMetrics(_ points: [CGPoint]) -> (width: CGFloat, height: CGFloat)? {
@@ -616,6 +632,7 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
                              y: fingertips.map(\.y).reduce(0, +) / CGFloat(fingertips.count))
         let allPoints = points.values.filter { $0.confidence >= minConfidence }.map(\.location)
         let handArea = boundingArea(allPoints)
+        let handBox = boundingBox(allPoints)
         let palmSpan = max(0.05, hypot(indexTip.x - littleTip.x, indexTip.y - littleTip.y))
         // 手指是否伸直:指尖比第二关节(PIP)离手腕更远 → 直;比掌跨参照更稳,握拳时不误判。
         // PIP 缺失时回退到旧的掌跨比值法。
@@ -634,21 +651,21 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         let fingers = [indexExtended, middleExtended, ringExtended, littleExtended]
 
         if let thumbTip = point(.thumbTip), distance(thumbTip, indexTip) < palmSpan * 0.42 {
-            return HandSignals(gesture: .ok, center: center, area: handArea, fingers: fingers)
+            return HandSignals(gesture: .ok, center: center, area: handArea, fingers: fingers, box: handBox)
         }
         if indexExtended && middleExtended && ringExtended && littleExtended {
-            return HandSignals(gesture: .openPalm, center: center, area: handArea, fingers: fingers)
+            return HandSignals(gesture: .openPalm, center: center, area: handArea, fingers: fingers, box: handBox)
         }
         if indexExtended && !middleExtended && !ringExtended && !littleExtended {
-            return HandSignals(gesture: .pointing, center: center, area: handArea, fingers: fingers)
+            return HandSignals(gesture: .pointing, center: center, area: handArea, fingers: fingers, box: handBox)
         }
         // 竖大拇指:其余手指基本握起 + 拇指明显在最上方。
         if let thumbTip = point(.thumbTip),
            !middleExtended, !ringExtended, !littleExtended,
            thumbTip.y > max(indexTip.y, middleTip.y, ringTip.y, littleTip.y) + 0.05 {
-            return HandSignals(gesture: .thumbsUp, center: center, area: handArea, fingers: fingers)
+            return HandSignals(gesture: .thumbsUp, center: center, area: handArea, fingers: fingers, box: handBox)
         }
-        return HandSignals(center: center, area: handArea, fingers: fingers)
+        return HandSignals(center: center, area: handArea, fingers: fingers, box: handBox)
     }
 
     nonisolated private static func distance(_ a: CGPoint, _ b: CGPoint) -> CGFloat {
@@ -661,6 +678,14 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
               let minY = points.map(\.y).min(),
               let maxY = points.map(\.y).max() else { return nil }
         return max(0, maxX - minX) * max(0, maxY - minY)
+    }
+
+    nonisolated private static func boundingBox(_ points: [CGPoint]) -> CGRect? {
+        guard let minX = points.map(\.x).min(),
+              let maxX = points.map(\.x).max(),
+              let minY = points.map(\.y).min(),
+              let maxY = points.map(\.y).max() else { return nil }
+        return CGRect(x: minX, y: minY, width: max(0, maxX - minX), height: max(0, maxY - minY))
     }
 }
 
@@ -1048,16 +1073,16 @@ private final class BuiltInRecognizer: @unchecked Sendable {
         return out
     }
 
-    /// 调试用:未过滤的原始检测(含 person 等),按置信度取前几个,让调试窗口看到模型实际输出。
-    func rawResults(from requests: [VNRequest]) -> [(label: String, conf: Float)] {
-        var out: [(String, Float)] = []
+    /// 调试用:未过滤的原始检测(含 person 等),按置信度取前几个,带归一化外框。
+    func rawResults(from requests: [VNRequest]) -> [(label: String, conf: Float, rect: CGRect)] {
+        var out: [(String, Float, CGRect)] = []
         for req in requests {
             guard let objects = req.results as? [VNRecognizedObjectObservation] else { continue }
             for obs in objects where obs.labels.first != nil {
-                out.append((obs.labels.first!.identifier, obs.labels.first!.confidence))
+                out.append((obs.labels.first!.identifier, obs.labels.first!.confidence, obs.boundingBox))
             }
         }
-        return out.sorted { $0.1 > $1.1 }.prefix(5).map { $0 }
+        return out.sorted { $0.1 > $1.1 }.prefix(8).map { $0 }
     }
 
     private static func loadDetectionModel() -> VNCoreMLModel? {

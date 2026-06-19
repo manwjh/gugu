@@ -48,6 +48,7 @@ final class GuguApp: NSObject, NSApplicationDelegate {
         home.onPlatformsChange = { [weak self] platforms in self?.pet.updatePlatforms(platforms) }
         console = Console(app: self)
         visionDebug = VisionDebugWindow()
+        visionDebug.previewProvider = { [weak self] in self!.visionSensor.makePreviewLayer() }
         pet.onStateChange = { [weak self] _ in
             self?.console.refreshMenu()
         }
