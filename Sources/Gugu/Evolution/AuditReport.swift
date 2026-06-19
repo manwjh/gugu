@@ -1,28 +1,9 @@
 import Foundation
 
-/// Append-only local audit log for actions that change files, settings, or
-/// permissions. It stores only summaries and file paths, never raw sensor data.
-enum Audit {
-    static func record(kind: String, summary: String, detail: [String: String] = [:]) {
-        var obj: [String: Any] = [
-            "t": ISO8601DateFormatter().string(from: Date()),
-            "kind": kind,
-            "summary": summary,
-        ]
-        if !detail.isEmpty { obj["detail"] = detail }
-        guard let data = try? JSONSerialization.data(withJSONObject: obj),
-              var line = String(data: data, encoding: .utf8) else { return }
-        line += "\n"
-        let url = Paths.auditFile()
-        if let h = try? FileHandle(forWritingTo: url) {
-            defer { try? h.close() }
-            _ = try? h.seekToEnd()
-            try? h.write(contentsOf: line.data(using: .utf8)!)
-        } else {
-            try? line.write(to: url, atomically: true, encoding: .utf8)
-        }
-    }
-
+/// Human-facing audit report. Kept in Evolution (not Kernel) because it reads
+/// pending proposals + evolution state to build the summary — i.e. it depends
+/// *up* on Evolution/Memory, while `Audit.record` (Kernel) depends on nothing.
+extension Audit {
     @MainActor
     static func report(maxEvents: Int = 80) -> URL {
         let todayEvents = readLines(Paths.eventsFile()).suffix(maxEvents)
