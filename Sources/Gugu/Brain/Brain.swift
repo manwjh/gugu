@@ -124,7 +124,8 @@ final class Brain {
             maxTokens: tier.maxTokens,
             system: systemPrompt,
             messages: [["role": "user", "content": userMsg]],
-            schema: Brain.heartbeatSchema
+            schema: Brain.heartbeatSchema,
+            policy: .heartbeat
         )
         budget.record(inputChars: personaText.count + userMsg.count,
                       outputChars: reply.text.count, tier: tier)
@@ -170,7 +171,7 @@ final class Brain {
                 }
                 // Other HTTP errors (rate limit, server error, etc.)
                 return L.chatFailed
-            case .transport:
+            case .transport, .timeout:
                 return L.errorNetwork
             case .malformed, .empty:
                 return L.chatFailed
@@ -300,7 +301,8 @@ final class Brain {
             maxTokens: max(tier.maxTokens, 300),
             system: systemPrompt,
             messages: messages,
-            schema: Brain.chatSchema
+            schema: Brain.chatSchema,
+            policy: .chat
         )
         budget.record(inputChars: personaText.count + messages.reduce(0) { $0 + (($1["content"] as? String)?.count ?? 0) },
                       outputChars: reply.text.count, tier: tier)
@@ -420,7 +422,8 @@ final class Brain {
             maxTokens: 600,
             system: system + "\n\n" + Brain.moveFormatSpec + "\n\n" + L.llmLanguageDirective,
             messages: [["role": "user", "content": user]],
-            schema: Brain.moveSchema
+            schema: Brain.moveSchema,
+            policy: .chat
         )
         budget.record(inputChars: system.count + user.count,
                       outputChars: reply.text.count, tier: config.instinct)
@@ -519,7 +522,8 @@ final class Brain {
             maxTokens: config.dream.maxTokens,
             system: systemPrompt,
             messages: [["role": "user", "content": user]],
-            schema: Brain.dreamSchema
+            schema: Brain.dreamSchema,
+            policy: .dream
         )
         budget.record(inputChars: systemPrompt.count + user.count,
                       outputChars: reply.text.count, tier: config.dream)

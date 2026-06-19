@@ -22,7 +22,7 @@ struct AnthropicClient: LLMClient {
         system: String?,
         messages: [[String: Any]],
         schema: [String: Any]? = nil,
-        retries: Int = 2
+        policy: LLMCallPolicy = .chat
     ) async throws -> LLMReply {
         var body: [String: Any] = [
             "model": model,
@@ -36,28 +36,17 @@ struct AnthropicClient: LLMClient {
         if let schema {
             body["output_config"] = ["format": ["type": "json_schema", "schema": schema]]
         }
-
-        var attempt = 0
-        while true {
-            do {
-                return try await doRequest(body: body)
-            } catch let e as LLMError {
-                if LLMRetry.isRetriable(e), attempt < retries {
-                    attempt += 1
-                    let delay = LLMRetry.backoffSeconds(attempt: attempt)
-                    try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-                    continue
-                }
-                throw e
-            }
+        return try await LLMRetry.run(policy: policy) {
+            try await doRequest(body: body, timeout: policy.timeout)
         }
     }
 
-    private func doRequest(body: [String: Any]) async throws -> LLMReply {
+    private func doRequest(body: [String: Any], timeout: TimeInterval) async throws -> LLMReply {
         guard let url = URL(string: "\(baseURL)/v1/messages") else {
             throw LLMError.malformed("bad url")
         }
         var req = URLRequest(url: url)
+        req.timeoutInterval = timeout
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue(apiKey, forHTTPHeaderField: "x-api-key")
@@ -82,7 +71,7 @@ struct AnthropicClient: LLMClient {
         if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             throw LLMError.empty("stop_reason=\(stop)")
         }
-        return LLMReply(text: text, stopReason: stop)
+        return LLMReply(text: text)
     }
 
     func createMessageBatch(
@@ -123,11 +112,11 @@ struct AnthropicClient: LLMClient {
             throw LLMError.malformed("bad result url")
         }
         var req = URLRequest(url: url)
+        req.timeoutInterval = LLMCallPolicy.dream.timeout
         req.httpMethod = "GET"
         req.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-        let (data, resp) = try await LLMTransport.session.data(for: req)
-        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        let (data, code) = try await LLMTransport.send(req, label: "anthropic batch results")
         let bodyText = String(data: data, encoding: .utf8) ?? ""
         guard (200..<300).contains(code) else {
             throw LLMError.http(code, bodyText)
@@ -140,6 +129,7 @@ struct AnthropicClient: LLMClient {
             throw LLMError.malformed("bad url")
         }
         var req = URLRequest(url: url)
+        req.timeoutInterval = LLMCallPolicy.dream.timeout
         req.httpMethod = method
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue(apiKey, forHTTPHeaderField: "x-api-key")
@@ -148,8 +138,7 @@ struct AnthropicClient: LLMClient {
             req.httpBody = try JSONSerialization.data(withJSONObject: body)
         }
 
-        let (data, resp) = try await LLMTransport.session.data(for: req)
-        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        let (data, code) = try await LLMTransport.send(req, label: "anthropic batch \(method)")
         let bodyText = String(data: data, encoding: .utf8) ?? ""
         guard (200..<300).contains(code) else {
             throw LLMError.http(code, bodyText)

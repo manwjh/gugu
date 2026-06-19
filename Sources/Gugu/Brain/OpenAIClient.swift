@@ -19,7 +19,7 @@ struct OpenAIClient: LLMClient {
         system: String?,
         messages: [[String: Any]],
         schema: [String: Any]? = nil,
-        retries: Int = 2
+        policy: LLMCallPolicy = .chat
     ) async throws -> LLMReply {
         // Build system text: persona + (when structured) a schema instruction.
         var systemText = system
@@ -50,19 +50,8 @@ struct OpenAIClient: LLMClient {
             body["response_format"] = ["type": "json_object"]
         }
 
-        var attempt = 0
-        while true {
-            do {
-                return try await doRequest(body: body, model: model)
-            } catch let e as LLMError {
-                if LLMRetry.isRetriable(e), attempt < retries {
-                    attempt += 1
-                    let delay = LLMRetry.backoffSeconds(attempt: attempt)
-                    try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-                    continue
-                }
-                throw e
-            }
+        return try await LLMRetry.run(policy: policy) {
+            try await doRequest(body: body, model: model, timeout: policy.timeout)
         }
     }
 
@@ -91,11 +80,12 @@ struct OpenAIClient: LLMClient {
         return ""
     }
 
-    private func doRequest(body: [String: Any], model: String) async throws -> LLMReply {
+    private func doRequest(body: [String: Any], model: String, timeout: TimeInterval) async throws -> LLMReply {
         guard let url = URL(string: "\(baseURL)/v1/chat/completions") else {
             throw LLMError.malformed("bad url")
         }
         var req = URLRequest(url: url)
+        req.timeoutInterval = timeout
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
@@ -134,6 +124,6 @@ struct OpenAIClient: LLMClient {
         if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             throw LLMError.empty("finish_reason=\(stop)")
         }
-        return LLMReply(text: text, stopReason: stop)
+        return LLMReply(text: text)
     }
 }

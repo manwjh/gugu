@@ -21,6 +21,11 @@ final class Scheduler {
     private var heartbeatInFlight = false
     private var dreamInFlight = false
 
+    // 心跳失败退避:连续失败后指数拉长下次尝试间隔(60s→…→600s 上限),
+    // 网络恢复成功后清零。避免断网期每 30s tick 都去猛敲死端点、各卡数十秒。
+    private var heartbeatFailures = 0
+    private var heartbeatBackoffUntil = Date.distantPast
+
     // 灵光额度跟踪(按天滚动)。
     private var sparkDay = ""
     private var sparkUsedToday = 0
@@ -94,6 +99,8 @@ final class Scheduler {
         }
 
         guard !heartbeatInFlight else { return }
+        // 失败退避:被动 tick 在退避窗口内直接跳过(force 的交互触发不受限)。
+        if !force, Date() < heartbeatBackoffUntil { return }
         heartbeatInFlight = true
         defer { heartbeatInFlight = false }
 
@@ -110,13 +117,17 @@ final class Scheduler {
                 useSpark: useSpark
             )
             lastHeartbeat = Date()
+            heartbeatFailures = 0
+            heartbeatBackoffUntil = .distantPast
             EventBus.shared.drainCuriosity()
             if useSpark { recordSparkUse() }
             Log.info("heartbeat", "mood=\(decision.mood) action=\(decision.action)\(useSpark ? " ✨spark" : "") speech=\(decision.speech.isEmpty ? "-" : decision.speech)")
             brain.memory.appendNote(decision.memoryNote)
             onDecision?(decision)
         } catch {
-            Log.info("heartbeat", "失败(发呆): \(error)")
+            heartbeatFailures += 1
+            heartbeatBackoffUntil = Date().addingTimeInterval(min(600, 30 * pow(2.0, Double(heartbeatFailures))))
+            Log.info("heartbeat", "失败(发呆,第\(heartbeatFailures)次,退避到 \(Int(heartbeatBackoffUntil.timeIntervalSinceNow))s 后): \(error)")
             // failure = the pet just stares into space; L0 keeps living
         }
     }
