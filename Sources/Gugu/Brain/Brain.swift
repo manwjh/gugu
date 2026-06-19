@@ -43,6 +43,10 @@ final class Brain {
             : AnthropicClient(baseURL: config.apiURL, apiKey: config.apiKey)
     }
 
+    /// Whether the current provider supports the batch dream transport.
+    /// Batch is Anthropic-only; openai mode must fall back to synchronous dreaming.
+    var batchSupported: Bool { config.apiProvider != "openai" }
+
     /// Batch transport — Anthropic-only. OpenAI mode has no batch path, so the
     /// dream layer must run synchronously there (Scheduler already branches on
     /// `dreamUseBatch`; this guard is a defensive backstop).

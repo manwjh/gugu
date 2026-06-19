@@ -15,10 +15,10 @@ struct DiscoveryHint: Equatable {
 enum Discovery {
     /// 全部提示,按优先级从高到低。第一条"未展示过且条件满足"的会被选中。
     /// 条件:`unlessDid` 计数为 0 时才提示(主人还没体验过这件事)。
-    private struct Rule {
+    private struct Rule: Sendable {
         let id: String
-        let text: () -> String
-        let isRelevant: (ProgressState) -> Bool
+        let text: @Sendable () -> String
+        let isRelevant: @Sendable (ProgressState) -> Bool
     }
 
     private static let rules: [Rule] = [

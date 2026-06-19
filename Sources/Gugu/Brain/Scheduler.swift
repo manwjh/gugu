@@ -31,6 +31,11 @@ final class Scheduler {
     var onMorning: ((String) -> Void)?
     /// Called when budget forces sleep.
     var onBudgetSleep: (() -> Void)?
+    /// Called when config.yaml's mtime changes on disk. The scheduler only
+    /// signals "the file changed" — applying side effects (brain.config, budget,
+    /// blacklist, persona, language) is GuguApp's job via its single applyConfig
+    /// path, so the scheduler stays out of global config management.
+    var onConfigFileChanged: (() -> Void)?
 
     private let curiosityThreshold: Double = 30
 
@@ -147,10 +152,11 @@ final class Scheduler {
         let memoryDay = Memory.dayString(for: targetDate)
         guard lastDreamDay != memoryDay else { return }
         dreamInFlight = true
+        let wantBatchButUnsupported = config.dreamUseBatch && !brain.batchSupported
         Task {
             defer { Task { @MainActor in self.dreamInFlight = false } }
             do {
-                if config.dreamUseBatch {
+                if config.dreamUseBatch && brain.batchSupported {
                     if DreamBatchStore.load() != nil {
                         if let state = try await brain.refreshDreamBatchStatus(),
                            let result = try await brain.applyReadyDreamBatch(state) {
@@ -164,11 +170,25 @@ final class Scheduler {
                     }
                     return
                 }
+                if wantBatchButUnsupported {
+                    Log.info("dream", "已开启 batch 梦境,但当前 provider(\(config.apiProvider))不支持 batch 传输,已回退为同步梦境。")
+                    Audit.record(
+                        kind: "dream_degraded",
+                        summary: "Batch dream unsupported by provider; fell back to synchronous dreaming.",
+                        detail: ["reason": "batch unsupported for provider", "provider": config.apiProvider]
+                    )
+                }
                 let result = try await brain.dream(for: targetDate)
                 Log.info("dream", "梦境整理完成,阶段: \(result.evolutionSummary), 新技能: \(result.newSkill ?? "无"), 提案: \(result.proposalTitle ?? "无")")
                 await runDueAutonomyTasks()
                 // morning words delivered when owner returns (cached here)
-                pendingMorningWords = morningWords(from: result)
+                var words = morningWords(from: result)
+                // One-time gentle heads-up when we were forced to fall back from batch.
+                if wantBatchButUnsupported && !dreamBatchFallbackNoticed {
+                    dreamBatchFallbackNoticed = true
+                    words += "\n(对了…我现在是用简单的方式整理梦境的,batch 模式这个大脑用不了。)"
+                }
+                pendingMorningWords = words
                 markDreamDone(for: memoryDay)
             } catch {
                 Log.info("dream", "梦境失败: \(error)")
@@ -177,6 +197,10 @@ final class Scheduler {
     }
 
     private var pendingMorningWords: String? = nil
+
+    /// One-shot guard: only tell the owner once that batch dreaming fell back to
+    /// synchronous mode for this provider, so we don't repeat it every morning.
+    private var dreamBatchFallbackNoticed = false
 
     /// Run owner-approved deferred tasks for real (via the local tool layer),
     /// not the offline stub. Failures (e.g. permission off) are recorded by the
@@ -231,20 +255,21 @@ final class Scheduler {
         !EventBus.lines(for: date).isEmpty || !brain.memory.notes(for: date).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    /// Push a fresh config in (from GuguApp's authoritative applyConfig path)
+    /// and re-baseline the mtime so the next tick won't re-fire onConfigFileChanged
+    /// for this same change. Pure assignment — does not trigger a tick.
+    func updateConfig(_ newConfig: Config) {
+        self.config = newConfig
+        self.lastConfigMTime = configMTime()
+    }
+
     private func reloadConfigIfNeeded() {
         let currentMTime = configMTime()
         guard currentMTime != lastConfigMTime else { return }
         lastConfigMTime = currentMTime
-        config = Config.load()
-        brain.config = config
-        L.current = config.language == "zh" ? .zh : .en
-        budget.dailyTokens = GrowthStage.adjustedDailyTokens(
-            base: config.dailyTokens,
-            stage: GrowthStage(rawStage: PetState.load().stage)
-        )
-        screenSensor.updateBlacklist(config.blacklistApps)
-        brain.reloadPersona()
-        Log.info("config", "配置已重新加载")
+        // Only signal the change; GuguApp owns applying it (and will call
+        // updateConfig back, harmlessly re-baselining mtime to the same value).
+        onConfigFileChanged?()
     }
 
     private func morningWords(from result: Brain.DreamResult) -> String {

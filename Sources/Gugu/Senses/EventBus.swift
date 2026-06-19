@@ -19,6 +19,11 @@ final class EventBus {
 
     private let iso = ISO8601DateFormatter()
 
+    /// Serial background queue for disk writes — keeps file IO off the main
+    /// thread (which also runs the 60fps physics/render loop). Serial ordering
+    /// guarantees append-order without an extra lock.
+    private let ioQueue = DispatchQueue(label: "gugu.eventbus.io")
+
     func post(kind: String, summary: String, weight: Int) {
         let e = Event(time: Date(), kind: kind, summary: summary, weight: weight)
         recent.append(e)
@@ -48,13 +53,19 @@ final class EventBus {
         guard let data = try? JSONSerialization.data(withJSONObject: obj),
               var line = String(data: data, encoding: .utf8) else { return }
         line += "\n"
+        // Compute everything that touches main-actor state up front, then capture
+        // only value types (URL + Data) into the background closure. The closure
+        // never reads self, so there is no cross-thread data race.
         let url = Paths.eventsFile()
-        if let h = try? FileHandle(forWritingTo: url) {
-            defer { try? h.close() }
-            _ = try? h.seekToEnd()
-            try? h.write(contentsOf: line.data(using: .utf8)!)
-        } else {
-            try? line.write(to: url, atomically: true, encoding: .utf8)
+        let lineData = Data(line.utf8)
+        ioQueue.async {
+            if let h = try? FileHandle(forWritingTo: url) {
+                defer { try? h.close() }
+                _ = try? h.seekToEnd()
+                try? h.write(contentsOf: lineData)
+            } else {
+                try? lineData.write(to: url, options: .atomic)
+            }
         }
     }
 

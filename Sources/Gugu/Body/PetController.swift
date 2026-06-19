@@ -64,7 +64,7 @@ enum PetBodyState: String {
     case followHand   // 跟随主人的手(共享坐标:走向手的水平位置)
 }
 
-private enum SupportSurface {
+enum SupportSurface {
     case appWindow(id: CGWindowID, frame: CGRect)
     case chatInput(frame: CGRect)
     case roomRim(frame: CGRect)        // 小窝内的"上沿"——房间里没有 app 窗口可栖,就栖在房间高处
@@ -106,17 +106,17 @@ final class PetController: NSObject {
     private let bubble = SpeechBubble()
 
     private(set) var state: PetBodyState = .idle
-    private var vel = CGVector.zero
+    var vel = CGVector.zero
     private var facingRight = true
     private var growthScale: CGFloat = 1
     private var walkTargetX: CGFloat?
-    private var homeFrame: CGRect?            // 小窝包围框(屏幕坐标);非 nil 表示在小窝(房间)里
-    private var platforms: [Platform] = []    // 房间内的平台(归一化坐标)
+    var homeFrame: CGRect?            // 小窝包围框(屏幕坐标);非 nil 表示在小窝(房间)里
+    var platforms: [Platform] = []    // 房间内的平台(归一化坐标)
     private var behaviorTimer: Timer?
     private var physicsTimer: Timer?
-    private var supportSurface: SupportSurface?
+    var supportSurface: SupportSurface?
     private var perchCompletion: (@MainActor () -> Void)?
-    private var perchCheckTimer: Timer?
+    var perchCheckTimer: Timer?
     private var dragSamples: [(p: CGPoint, t: TimeInterval)] = []
     private var dragGrabOffset = CGPoint.zero  // 抓取点相对窗口原点的偏移,拖拽时保持不瞬移
     private var stateUntil: Date = .distantPast
@@ -139,9 +139,9 @@ final class PetController: NSObject {
     /// idle 时偶尔自发流露的情绪符号(由 app 注入,读 Affect;大多返回 nil 以免刷屏)。
     var idleManpuProvider: (() -> Manpu?)?
 
-    private let winSize = CGSize(width: 150, height: 150)
+    let winSize = CGSize(width: 150, height: 150)
     /// Bird's feet y-offset inside the scene.
-    private let feetY: CGFloat = 12
+    let feetY: CGFloat = 12
 
     override init() {
         window = PetWindow(size: winSize)
@@ -394,7 +394,7 @@ final class PetController: NSObject {
     /// 那会把隐藏的 aura 光环(半径33)、zzz、展开的翅膀都算进去,导致夹边界时
     /// 以为鸟比实际大一圈,既缩小活动区又在四周留隐形空隙。这里用固定的身体核心
     /// 框(绕 BirdNode 原点按 growthScale 缩放),贴边均匀、活动区最大化。
-    private func birdVisibleFrame() -> CGRect {
+    func birdVisibleFrame() -> CGRect {
         let s = growthScale
         let core = CGRect(x: -22, y: -4, width: 48, height: 56)   // 本地核心(不含 aura/zzz)
         let cx = winSize.width / 2                                // bird.position.x 固定在窗口中线
@@ -487,52 +487,6 @@ final class PetController: NSObject {
             handFollowArmed = false
             if state == .followHand { bird.position.y = feetY; transition(to: .idle) }
         }
-    }
-
-    /// HomeController 通知平台变化(画/删/清空):更新本地缓存。
-    /// 若咕咕正站/栖在某条被删掉的平台上 → 解除支撑,自然坠落。
-    func updatePlatforms(_ newPlatforms: [Platform]) {
-        platforms = newPlatforms
-        if let id = supportSurface?.platformId,
-           !newPlatforms.contains(where: { $0.id == id }) {
-            supportSurface = nil
-            perchCheckTimer?.invalidate()
-            if state != .dragged {
-                bird.flapWings(times: 4, fast: true)
-                vel = CGVector(dx: CGFloat.random(in: -30...30), dy: 0)
-                bird.position.y = feetY
-                transition(to: .falling)
-            }
-        }
-    }
-
-    /// 下落中穿过某平台 → 返回落脚信息(平台 id + 落脚点);否则 nil。
-    /// 检测:从上一帧到这一帧,窗口中心点穿过了某条线段,且速度向下(vel.dy < 0)。
-    private func checkPlatformLanding(at origin: CGPoint, vel: CGVector) -> (platformId: UUID, landingOrigin: CGPoint)? {
-        guard let home = homeFrame, vel.dy < 0 else { return nil }
-        // 全程用屏幕绝对坐标(经 Platform.absolute),省掉归一化来回换算;
-        // 落点参照鸟"可见底"(与房间地板一致),而非 feetY 锚点,否则脚会穿到线下面。
-        let bvMinY = birdVisibleFrame().minY
-        let cx = origin.x + winSize.width / 2
-        let curY = origin.y + feetY
-        let prevY = curY - vel.dy / 60.0            // 上一帧 y(dt≈1/60)
-        for plat in platforms {
-            let (s, e) = plat.absolute(in: home)
-            // 这一帧落到线段 y 区间内,且确有"自上而下穿过"的趋势
-            guard prevY >= min(s.y, e.y), curY <= max(s.y, e.y) else { continue }
-            let dx = e.x - s.x
-            if abs(dx) < 1e-6 {                      // 垂直线段:x 命中即落到顶端
-                guard abs(cx - s.x) < home.width * 0.01 else { continue }
-                return (plat.id, CGPoint(x: origin.x, y: max(s.y, e.y) - bvMinY))
-            }
-            let t = (cx - s.x) / dx
-            guard t >= 0, t <= 1 else { continue }   // 不在线段横向范围内
-            let lineY = s.y + t * (e.y - s.y)
-            if prevY >= lineY && curY <= lineY {
-                return (plat.id, CGPoint(x: origin.x, y: lineY - bvMinY))
-            }
-        }
-        return nil
     }
 
     // MARK: - Autonomous idle life (zero cost)
@@ -896,7 +850,7 @@ final class PetController: NSObject {
         }
     }
 
-    private func transition(to new: PetBodyState) {
+    func transition(to new: PetBodyState) {
         guard state != new else { return }
         state = new
         onStateChange?(new)
@@ -1096,47 +1050,6 @@ final class PetController: NSObject {
         return CGPoint(x: x, y: y)
     }
 
-    /// 返回离当前位置最近的平台(房间内有平台时用)
-    private func nearestPlatform() -> Platform? {
-        guard let home = homeFrame, !platforms.isEmpty else { return nil }
-        let birdCenterX = window.frame.origin.x + winSize.width / 2
-        let birdCenterY = window.frame.origin.y + feetY
-        let normBird = CGPoint(x: (birdCenterX - home.minX) / home.width,
-                               y: (birdCenterY - home.minY) / home.height)
-        var nearest: Platform?
-        var minDist = CGFloat.infinity
-        for plat in platforms {
-            let closest = plat.closestPoint(to: normBird)
-            let dist = hypot(closest.x - normBird.x, closest.y - normBird.y)
-            if dist < minDist {
-                minDist = dist
-                nearest = plat
-            }
-        }
-        return nearest
-    }
-
-    /// 平台在鸟中心 x(屏幕 px)处对应的窗口 origin.y(让鸟可见底踩在斜面上);
-    /// x 超出线段范围返回 nil。
-    private func platformOriginY(_ plat: Platform, birdCenterX cx: CGFloat) -> CGFloat? {
-        guard let home = homeFrame else { return nil }
-        let (s, e) = plat.absolute(in: home)
-        let minX = min(s.x, e.x), maxX = max(s.x, e.x)
-        guard cx >= minX - 1, cx <= maxX + 1 else { return nil }
-        let dx = e.x - s.x
-        let lineY: CGFloat
-        if abs(dx) < 1e-6 { lineY = max(s.y, e.y) }     // 垂直线段:用顶端
-        else { lineY = s.y + (cx - s.x) / dx * (e.y - s.y) }
-        return lineY - birdVisibleFrame().minY
-    }
-
-    /// 平台两端对应的窗口 origin.x 范围(供沿平台走动/折返时夹住,不走出平台)。
-    private func platformOriginXRange(_ plat: Platform) -> (min: CGFloat, max: CGFloat)? {
-        guard let home = homeFrame else { return nil }
-        let (s, e) = plat.absolute(in: home)
-        return (min(s.x, e.x) - winSize.width / 2, max(s.x, e.x) - winSize.width / 2)
-    }
-
     private func becomePerched() {
         // 飞到平台:站上去(.idle),可在上面走动/折返,而不是静止 perch。
         if case .platform = supportSurface {
@@ -1229,36 +1142,6 @@ final class PetController: NSObject {
         bird.flapWings(times: 6, fast: true)
         vel = CGVector(dx: CGFloat.random(in: -60...60), dy: 0)
         transition(to: .falling)
-    }
-
-    /// Frontmost normal window of another app, in AppKit coordinates.
-    static func frontmostWindowInfo() -> (id: CGWindowID, frame: CGRect)? {
-        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return nil }
-        let myPid = ProcessInfo.processInfo.processIdentifier
-        let primaryHeight = NSScreen.screens.first?.frame.height ?? 1080
-        for info in list {
-            guard let layer = info[kCGWindowLayer as String] as? Int, layer == 0,
-                  let pid = info[kCGWindowOwnerPID as String] as? Int32, pid != myPid,
-                  let boundsDict = info[kCGWindowBounds as String] as? [String: CGFloat] else { continue }
-            let w = boundsDict["Width"] ?? 0, h = boundsDict["Height"] ?? 0
-            guard w > 250, h > 150 else { continue }
-            let cgX = boundsDict["X"] ?? 0, cgY = boundsDict["Y"] ?? 0
-            // CG top-left origin → AppKit bottom-left origin
-            let akFrame = CGRect(x: cgX, y: primaryHeight - cgY - h, width: w, height: h)
-            guard let num = info[kCGWindowNumber as String] as? CGWindowID else { continue }
-            return (num, akFrame)
-        }
-        return nil
-    }
-
-    static func windowInfo(for id: CGWindowID) -> (id: CGWindowID, frame: CGRect)? {
-        guard let list = CGWindowListCopyWindowInfo(.optionIncludingWindow, id) as? [[String: Any]],
-              let info = list.first,
-              let boundsDict = info[kCGWindowBounds as String] as? [String: CGFloat] else { return nil }
-        let primaryHeight = NSScreen.screens.first?.frame.height ?? 1080
-        let w = boundsDict["Width"] ?? 0, h = boundsDict["Height"] ?? 0
-        let cgX = boundsDict["X"] ?? 0, cgY = boundsDict["Y"] ?? 0
-        return (id, CGRect(x: cgX, y: primaryHeight - cgY - h, width: w, height: h))
     }
 
     // MARK: - Dragging
@@ -1439,225 +1322,5 @@ final class PetController: NSObject {
             return String(joined.prefix(76)).trimmingCharacters(in: .whitespacesAndNewlines) + "…"
         }
         return joined
-    }
-}
-
-/// Floating rounded speech bubble in its own panel, follows the pet.
-@MainActor
-final class SpeechBubble {
-    private let panel: NSPanel
-    private let label = NSTextField(wrappingLabelWithString: "")
-    private let container = BubbleShapeView()
-    private var hideTask: DispatchWorkItem?
-
-    init() {
-        panel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel],
-                        backing: .buffered, defer: false)
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.hasShadow = true
-        panel.level = .statusBar
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        panel.ignoresMouseEvents = true
-
-        label.font = NSFont.systemFont(ofSize: 13)
-        label.textColor = NSColor(calibratedWhite: 0.15, alpha: 1)
-        label.isEditable = false
-        label.isBordered = false
-        label.backgroundColor = .clear
-        container.addSubview(label)
-        panel.contentView = container
-    }
-
-    func show(text: String, near petWindow: NSWindow, avoiding avoidanceFrame: CGRect? = nil) {
-        hideTask?.cancel()
-        label.stringValue = text
-        let maxWidth: CGFloat = 220
-        let size = label.sizeThatFits(NSSize(width: maxWidth, height: 600))
-        let padX: CGFloat = 16
-        let padY: CGFloat = 14
-        let tailSpace: CGFloat = 14
-        let w = min(maxWidth, size.width) + padX * 2 + tailSpace * 2
-        let h = size.height + padY * 2 + tailSpace * 2
-        label.frame = CGRect(x: padX + tailSpace,
-                             y: padY + tailSpace,
-                             width: w - (padX + tailSpace) * 2,
-                             height: h - (padY + tailSpace) * 2)
-        container.frame = CGRect(x: 0, y: 0, width: w, height: h)
-        panel.setContentSize(NSSize(width: w, height: h))
-        position(relativeTo: petWindow, avoiding: avoidanceFrame)
-        panel.alphaValue = 0
-        panel.orderFrontRegardless()
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.18
-            panel.animator().alphaValue = 1
-        }
-        // Duration scales with reading time; keep it long enough for relaxed desktop reading.
-        let dur = min(24.0, max(6.0, Double(text.count) * 0.34))
-        let task = DispatchWorkItem { [weak self] in self?.hide() }
-        hideTask = task
-        DispatchQueue.main.asyncAfter(deadline: .now() + dur, execute: task)
-    }
-
-    func hide() {
-        NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.3
-            panel.animator().alphaValue = 0
-        }, completionHandler: { [panel] in
-            Task { @MainActor in panel.orderOut(nil) }
-        })
-    }
-
-    private func position(relativeTo petWindow: NSWindow, avoiding avoidanceFrame: CGRect? = nil) {
-        let pf = petWindow.frame
-        // The transparent pet window is taller than the drawn bird. Anchor the
-        // bubble to the bird's visual head, not to the window top.
-        let birdHeadTop = pf.minY + 72
-        let anchor = CGPoint(x: pf.midX, y: birdHeadTop)
-        let tipInset: CGFloat = 4
-        let base = CGRect(x: anchor.x - panel.frame.width / 2,
-                          y: anchor.y - tipInset,
-                          width: panel.frame.width,
-                          height: panel.frame.height)
-        var chosen = base
-        if let scr = NSScreen.screens.first(where: { $0.frame.intersects(pf) }) ?? NSScreen.main {
-            let visible = scr.visibleFrame.insetBy(dx: 4, dy: 4)
-            let gap: CGFloat = 8
-            let avoidance = avoidanceFrame?.insetBy(dx: -gap, dy: -gap)
-            let sideY = anchor.y - panel.frame.height / 2
-            let left = CGRect(x: anchor.x - panel.frame.width + tipInset,
-                              y: sideY,
-                              width: panel.frame.width,
-                              height: panel.frame.height)
-            let right = CGRect(x: anchor.x - tipInset,
-                               y: sideY,
-                               width: panel.frame.width,
-                               height: panel.frame.height)
-            let below = CGRect(x: anchor.x - panel.frame.width / 2,
-                               y: anchor.y - panel.frame.height + tipInset,
-                               width: panel.frame.width,
-                               height: panel.frame.height)
-            var candidates = [base]
-            if let avoidance {
-                let sideFirst = avoidance.midX >= anchor.x ? [left, right] : [right, left]
-                candidates += sideFirst + [
-                    CGRect(x: base.minX,
-                           y: avoidance.maxY + gap,
-                           width: panel.frame.width,
-                           height: panel.frame.height),
-                    below,
-                    CGRect(x: base.minX,
-                           y: avoidance.minY - panel.frame.height - gap,
-                           width: panel.frame.width,
-                           height: panel.frame.height),
-                ]
-            }
-            if base.maxY > visible.maxY {
-                candidates.append(below)
-            }
-            chosen = candidates
-                .map { clamped($0, to: visible) }
-                .first { frame in
-                    guard let avoidance else { return true }
-                    return !frame.intersects(avoidance)
-                } ?? clamped(base, to: visible)
-        }
-        panel.setFrameOrigin(chosen.origin)
-        let rawTip = panel.convertFromScreen(NSRect(x: anchor.x, y: anchor.y, width: 1, height: 1)).origin
-        container.tailTip = CGPoint(x: max(3, min(rawTip.x, panel.frame.width - 3)),
-                                    y: max(3, min(rawTip.y, panel.frame.height - 3)))
-    }
-
-    func follow(petWindow: NSWindow) {
-        guard panel.isVisible else { return }
-        position(relativeTo: petWindow)
-    }
-
-    func follow(petWindow: NSWindow, avoiding avoidanceFrame: CGRect?) {
-        guard panel.isVisible else { return }
-        position(relativeTo: petWindow, avoiding: avoidanceFrame)
-    }
-
-    private func clamped(_ frame: CGRect, to visible: CGRect) -> CGRect {
-        let x = max(visible.minX, min(frame.minX, visible.maxX - frame.width))
-        let y = max(visible.minY, min(frame.minY, visible.maxY - frame.height))
-        return CGRect(origin: CGPoint(x: x, y: y), size: frame.size)
-    }
-}
-
-@MainActor
-private final class BubbleShapeView: NSView {
-    var tailTip: CGPoint = .zero {
-        didSet { needsDisplay = true }
-    }
-
-    override var isFlipped: Bool { false }
-
-    override func draw(_ dirtyRect: NSRect) {
-        super.draw(dirtyRect)
-        let tailSpace: CGFloat = 14
-        let body = bounds.insetBy(dx: tailSpace + 0.5, dy: tailSpace + 0.5)
-        let corner: CGFloat = 13
-        let tailWidth: CGFloat = 18
-        let attachX = max(body.minX + corner + tailWidth / 2,
-                          min(tailTip.x, body.maxX - corner - tailWidth / 2))
-        let attachY = max(body.minY + corner + tailWidth / 2,
-                          min(tailTip.y, body.maxY - corner - tailWidth / 2))
-
-        let bodyPath = NSBezierPath(roundedRect: body, xRadius: corner, yRadius: corner)
-        let tail = NSBezierPath()
-        let tailStart: CGPoint
-        let tailEnd: CGPoint
-        switch nearestEdge(to: tailTip, in: body) {
-        case .bottom:
-            tailStart = CGPoint(x: attachX - tailWidth / 2, y: body.minY + 1)
-            tailEnd = CGPoint(x: attachX + tailWidth / 2, y: body.minY + 1)
-        case .top:
-            tailStart = CGPoint(x: attachX - tailWidth / 2, y: body.maxY - 1)
-            tailEnd = CGPoint(x: attachX + tailWidth / 2, y: body.maxY - 1)
-        case .left:
-            tailStart = CGPoint(x: body.minX + 1, y: attachY - tailWidth / 2)
-            tailEnd = CGPoint(x: body.minX + 1, y: attachY + tailWidth / 2)
-        case .right:
-            tailStart = CGPoint(x: body.maxX - 1, y: attachY - tailWidth / 2)
-            tailEnd = CGPoint(x: body.maxX - 1, y: attachY + tailWidth / 2)
-        }
-        tail.move(to: tailStart)
-        tail.line(to: tailTip)
-        tail.line(to: tailEnd)
-        tail.close()
-
-        let fillColor = NSColor(calibratedWhite: 1.0, alpha: 0.97)
-        let strokeColor = NSColor(calibratedWhite: 0.3, alpha: 0.24)
-        fillColor.setFill()
-        bodyPath.fill()
-        tail.fill()
-
-        strokeColor.setStroke()
-        bodyPath.lineWidth = 1
-        bodyPath.stroke()
-
-        // Re-fill the tail after stroking the rounded body so the join has no inner seam.
-        fillColor.setFill()
-        tail.fill()
-        let tailStroke = NSBezierPath()
-        tailStroke.move(to: tailStart)
-        tailStroke.line(to: tailTip)
-        tailStroke.line(to: tailEnd)
-        strokeColor.setStroke()
-        tailStroke.lineWidth = 1
-        tailStroke.stroke()
-    }
-
-    private enum Edge { case top, bottom, left, right }
-
-    private func nearestEdge(to point: CGPoint, in rect: CGRect) -> Edge {
-        let distances: [(Edge, CGFloat)] = [
-            (.bottom, abs(point.y - rect.minY)),
-            (.top, abs(point.y - rect.maxY)),
-            (.left, abs(point.x - rect.minX)),
-            (.right, abs(point.x - rect.maxX)),
-        ]
-        return distances.min { $0.1 < $1.1 }?.0 ?? .bottom
     }
 }

@@ -135,23 +135,22 @@ final class GuguApp: NSObject, NSApplicationDelegate {
             self.pet.say(L.budgetSleepy)
             self.pet.sleep()
         }
+        // 调度器发现 config.yaml 文件变了 → 走唯一出口应用副作用(它自己不再越权管理)
+        scheduler.onConfigFileChanged = { [weak self] in self?.reloadConfigFromDisk() }
 
         // direct interactions → affect + events (+ maybe a quick heartbeat)
         pet.onPoke = { [weak self] in
             guard let self else { return }
             self.affect.poked()
             EventBus.shared.post(kind: "poke", summary: L.eventPoke, weight: 20)
-            var state = PetState.load(); state.interactions += 1; state.save()
+            PetState.mutate { $0.interactions += 1 }
             self.afterInteraction(.poke)
         }
         pet.onPet = { [weak self] in
             guard let self else { return }
             self.affect.petted()
             EventBus.shared.post(kind: "petted", summary: L.eventPetted, weight: 22)
-            var state = PetState.load()
-            state.interactions += 1
-            state.bond = min(1, state.bond + Affect.bondGainPetted)
-            state.save()
+            PetState.mutate { $0.interactions += 1; $0.bond = min(1, $0.bond + Affect.bondGainPetted) }
             self.afterInteraction(.pet)
         }
         pet.onThrown = { [weak self] in
@@ -591,15 +590,17 @@ final class GuguApp: NSObject, NSApplicationDelegate {
         console.refreshMenu()
     }
 
-    /// Re-read config.yaml after the settings window saves. Mirrors the
-    /// scheduler's hot-reload path so a manual save and a file edit converge.
+    /// 配置应用的唯一权威出口:读盘 → 推给所有依赖者。
+    /// 设置窗口保存、提案批准、调度器发现文件变更,统统汇流到这里,
+    /// 三处副作用收成一份,任何一处遗漏(如曾经漏掉的 L.current)都消除。
     func reloadConfigFromDisk() {
         config = Config.load()
-        brain.config = config
         L.current = config.language == "zh" ? .zh : .en
-        screenSensor.updateBlacklist(config.blacklistApps)
+        brain.config = config
         brain.reloadPersona()
-        refreshGrowthState()
+        screenSensor.updateBlacklist(config.blacklistApps)
+        scheduler.updateConfig(config)   // 推新 config + 同步 mtime 基线(不重复触发)
+        refreshGrowthState()             // budget + pet + menu
         Log.info("config", L.configReloaded)
     }
 }

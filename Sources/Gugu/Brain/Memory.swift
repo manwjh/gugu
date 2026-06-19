@@ -536,12 +536,29 @@ struct PetState: Codable {
         try data.write(to: Paths.state, options: .atomic)
     }
 
+    /// 原子读-改-写:load 最新盘上值 → 应用变更 → 立刻 save。
+    /// 同步无挂起,确保不会用陈旧快照覆盖期间发生的其它写入。
+    @discardableResult
+    static func mutate(_ body: (inout PetState) -> Void) -> PetState {
+        var s = load()
+        body(&s)
+        s.save()
+        return s
+    }
+
+    /// 同 mutate,但用 saveRequired() 抛出保存错误,供需要感知失败的调用方(如夜间结算)使用。
+    @discardableResult
+    static func mutateRequired(_ body: (inout PetState) throws -> Void) throws -> PetState {
+        var s = load()
+        try body(&s)
+        try s.saveRequired()
+        return s
+    }
+
     /// Apply a small long-term bond increment and persist. PetState.bond is the
     /// single source of truth for bond (Affect no longer holds a copy).
     static func recordBondGain(_ delta: Double) {
-        var state = load()
-        state.bond = min(1, state.bond + delta)
-        state.save()
+        mutate { $0.bond = min(1, $0.bond + delta) }
     }
 }
 

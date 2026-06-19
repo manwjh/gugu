@@ -46,27 +46,36 @@ final class Evolution {
     }
 
     func settleAfterDreamRequired(state: PetState, eventCount: Int) throws -> Settlement {
-        var next = state
-        let oldStage = GrowthStage(rawStage: state.stage)
-
-        next.days_together += 1
-        next.events_seen += eventCount
-        next.bond = min(1, max(next.bond, inferredBond(from: state)))
-        next.trust = min(1, inferredTrust(from: next))
-
-        let target = eligibleStage(for: next)
+        // 注意:传入的 state 是 await(brain.dream)之前 load 的快照,可能已被
+        // 期间的 poke/pet/recordBondGain 写入磁盘的 interactions/bond 增量超过。
+        // 这里用 mutate 在 save 前一刻重新 load 最新盘值,避免陈旧快照覆盖。
+        // - days_together / events_seen 是累加增量:基于 s. 当前值 += ,绝不基于旧 state。
+        // - bond / trust 是从当前状态算出的"绝对值",且经 max 保证单调不减,基于最新 s 计算。
+        // - stage 不变(只动 pending_stage),oldStage 也按最新 s.stage 取。
+        var oldStage = GrowthStage(rawStage: state.stage)
+        var target = oldStage
         var proposal: Proposal?
-        if target.order > oldStage.order {
-            next.pending_stage = target.rawValue
-            // 查重:同一目标形态已有待批提案就不再生成,避免出现多个"长成雏鸟"。
-            if !stageProposalExists(target: target) {
-                proposal = writeStageProposal(from: oldStage, to: target, state: next)
-            } else {
-                proposal = nil
+
+        try PetState.mutateRequired { s in
+            oldStage = GrowthStage(rawStage: s.stage)
+
+            s.days_together += 1
+            s.events_seen += eventCount
+            s.bond = min(1, max(s.bond, self.inferredBond(from: s)))
+            s.trust = min(1, self.inferredTrust(from: s))
+
+            target = self.eligibleStage(for: s)
+            if target.order > oldStage.order {
+                s.pending_stage = target.rawValue
+                // 查重:同一目标形态已有待批提案就不再生成,避免出现多个"长成雏鸟"。
+                if !self.stageProposalExists(target: target) {
+                    proposal = self.writeStageProposal(from: oldStage, to: target, state: s)
+                } else {
+                    proposal = nil
+                }
             }
         }
 
-        try next.saveRequired()
         pruneExpiredProposals()
 
         return Settlement(

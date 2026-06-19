@@ -246,7 +246,7 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
     /// 用户主动点"睁眼"时的入口:开启并把**真实结果**回调出去——
     /// 授权通过且会话起来了才报 .started,被拒报 .denied,没设备报 .noDevice。
     /// 这样菜单就不会在权限被拒时还假装"睁开眼睛看了看你"。
-    func requestEnable(_ completion: @escaping (VisionStartOutcome) -> Void) {
+    func requestEnable(_ completion: @escaping @MainActor @Sendable (VisionStartOutcome) -> Void) {
         UserDefaults.standard.set(true, forKey: "gugu.camera.enabled")
         guard !running else { completion(.started); return }
         switch AVCaptureDevice.authorizationStatus(for: .video) {
@@ -266,7 +266,7 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         }
     }
 
-    private func configureAndStart(announce: ((VisionStartOutcome) -> Void)? = nil) {
+    private func configureAndStart(announce: (@MainActor @Sendable (VisionStartOutcome) -> Void)? = nil) {
         guard enabled, !running else { return }
         guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front)
                 ?? AVCaptureDevice.default(for: .video),

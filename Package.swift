@@ -8,6 +8,9 @@ let package = Package(
         .executableTarget(
             name: "gugu",
             path: "Sources/Gugu",
+            swiftSettings: [
+                .unsafeFlags(["-strict-concurrency=complete"])
+            ],
             linkerSettings: [
                 // Embed Info.plist so camera/mic usage strings are attributed.
                 .unsafeFlags([
