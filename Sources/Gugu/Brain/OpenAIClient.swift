@@ -2,12 +2,12 @@ import Foundation
 import GuguKernel
 
 /// OpenAI Chat Completions client for OpenAI-compatible vendors (DeepSeek's own
-/// API, local Ollama, SiliconFlow, etc.). Opt-in via `api.provider: openai`.
-///
-/// Structured output uses the broadly-supported `response_format: json_object`
-/// plus a schema description appended to the system prompt (see `SchemaHint`),
-/// rather than `json_schema` which many compatible endpoints reject. The reply
-/// is parsed leniently by the same `Brain.extractJSON` used for Anthropic.
+/// API, local Ollama, SiliconFlow, etc.). The factory default (`api.provider:
+/// openai`). Structured output uses the broadly-supported `response_format:
+/// json_object` plus a schema description appended to the system prompt (see
+/// `SchemaHint`), rather than `json_schema` which many compatible endpoints
+/// reject. Wire models live in `LLMWire.swift`; parsing is the testable
+/// `OpenAIResponse.reply(from:)`.
 @MainActor
 struct OpenAIClient: LLMClient {
     let baseURL: String
@@ -21,51 +21,49 @@ struct OpenAIClient: LLMClient {
         schema: [String: Any]? = nil,
         policy: LLMCallPolicy = .chat
     ) async throws -> LLMReply {
-        // Build system text: persona + (when structured) a schema instruction.
+        // System text: persona + (when structured) a schema instruction.
         var systemText = system
         if let schema {
             let hint = SchemaHint.describe(schema)
             systemText = (system.map { $0 + "\n\n" } ?? "") + hint
         }
+        // json_object mode requires the literal word "json" in the prompt — guarantee it.
+        if schema != nil, let s = systemText {
+            systemText = OpenAIJSONGuard.ensureJSONMentioned(s)
+        }
 
-        var chatMessages: [[String: Any]] = []
+        var chatMessages: [OpenAIRequest.Message] = []
         if let systemText {
-            chatMessages.append(["role": "system", "content": systemText])
+            chatMessages.append(.init(role: "system", content: systemText))
         }
         for m in messages {
-            let role = (m["role"] as? String) ?? "user"
-            chatMessages.append(["role": role, "content": Self.flatten(m["content"])])
+            chatMessages.append(.init(role: (m["role"] as? String) ?? "user",
+                                      content: Self.flatten(m["content"])))
         }
 
-        var body: [String: Any] = [
-            "model": model,
-            "max_tokens": Self.budgetWithReasoningHeadroom(maxTokens),
-            "messages": chatMessages,
-        ]
-        // Reasoning models (e.g. deepseek-v4) spend completion tokens on hidden
-        // reasoning before emitting content. Nudge it lower so more of the
-        // budget reaches the actual answer; the headroom above is the real fix.
-        body["reasoning_effort"] = "low"
-        if schema != nil {
-            body["response_format"] = ["type": "json_object"]
-        }
+        let request = OpenAIRequest(
+            model: model,
+            // Reasoning models burn completion tokens on hidden reasoning before
+            // any visible output; pad the budget so the answer isn't truncated.
+            max_tokens: Self.budgetWithReasoningHeadroom(maxTokens),
+            // Nudge reasoning lower so more of the budget reaches the answer.
+            reasoning_effort: "low",
+            messages: chatMessages,
+            response_format: schema != nil ? .init(type: "json_object") : nil
+        )
 
         return try await LLMRetry.run(policy: policy) {
-            try await doRequest(body: body, model: model, timeout: policy.timeout)
+            try await doRequest(request, model: model, timeout: policy.timeout)
         }
     }
 
     /// Reasoning models burn completion tokens on hidden reasoning before any
     /// visible output, sharing the single `max_tokens` budget. The caller's
     /// `max_tokens` expresses *desired visible output*; we add headroom so
-    /// reasoning doesn't starve the answer and truncate the JSON.
-    ///
-    /// Reasoning cost is largely independent of the requested output length and
-    /// high-variance: measured deepseek-v4 (taas.hk, reasoning_effort=low) peaks
-    /// observed at ~550 tokens with occasional higher spikes. A flat 1024-token
-    /// floor (≈2× the observed peak) clears truncation across all tiers; we also
-    /// keep "at least double" so unusually large output requests scale too.
-    /// Per the stability-first choice, this trades extra tokens for reliability.
+    /// reasoning doesn't starve the answer and truncate the JSON. Measured
+    /// deepseek-v4 (taas.hk, reasoning_effort=low) peaks ~550 reasoning tokens;
+    /// a 1024 floor (≈2× peak) clears truncation, "at least double" scales large
+    /// requests too. Trades extra tokens for reliability.
     static func budgetWithReasoningHeadroom(_ requested: Int) -> Int {
         requested + max(1024, requested)
     }
@@ -80,7 +78,7 @@ struct OpenAIClient: LLMClient {
         return ""
     }
 
-    private func doRequest(body: [String: Any], model: String, timeout: TimeInterval) async throws -> LLMReply {
+    private func doRequest(_ request: OpenAIRequest, model: String, timeout: TimeInterval) async throws -> LLMReply {
         guard let url = URL(string: "\(baseURL)/v1/chat/completions") else {
             throw LLMError.malformed("bad url")
         }
@@ -89,41 +87,12 @@ struct OpenAIClient: LLMClient {
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        req.httpBody = try JSONEncoder().encode(request)
 
         let (data, code) = try await LLMTransport.send(req, label: "openai \(model)")
-        let bodyText = String(data: data, encoding: .utf8) ?? ""
         guard (200..<300).contains(code) else {
-            throw LLMError.http(code, bodyText)
+            throw LLMError.http(code, String(data: data, encoding: .utf8) ?? "")
         }
-        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let choices = obj["choices"] as? [[String: Any]],
-              let first = choices.first else {
-            throw LLMError.malformed(bodyText)
-        }
-        let message = first["message"] as? [String: Any]
-        var text = (message?["content"] as? String) ?? ""
-        let stop = (first["finish_reason"] as? String) ?? "unknown"
-        // 有些 reasoning 模型把答案落在 reasoning_content,而 content 为空。回退取之,
-        // 让下游的宽松 JSON 提取还有机会捞到内容。
-        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let reasoning = (message?["reasoning_content"] as? String)
-                ?? (message?["reasoning"] as? String) ?? ""
-            if !reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                text = reasoning
-            }
-        }
-        // A reasoning model that ran out of budget mid-thought returns
-        // finish_reason "length" with empty/partial content. Surface that
-        // distinctly so it's diagnosable (and not mistaken for a model refusal).
-        if stop == "length" && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            throw LLMError.malformed("truncated: reasoning consumed the token budget before any output (raise max_tokens)")
-        }
-        // 200 但正文(含 reasoning 回退)仍为空:不静默返回空,抛可重试错误再试一次,
-        // 否则 gugu 会"听到却没反应"。
-        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            throw LLMError.empty("finish_reason=\(stop)")
-        }
-        return LLMReply(text: text)
+        return try OpenAIResponse.reply(from: data)
     }
 }

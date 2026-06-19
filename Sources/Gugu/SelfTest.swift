@@ -1008,6 +1008,52 @@ func runOfflineSelfTest() {
                   "provider=\(Config.load().apiProvider)")
         }
 
+        // LLM wire: typed request/response contract — pure parsing, no network.
+        // Locks the trickiest paths (reasoning fallback / truncation / empty /
+        // multi-block join / json_object guard) so they can't silently regress.
+        do {
+            func parse(_ json: String, _ f: (Data) throws -> LLMReply) -> Result<String, LLMError> {
+                do { return .success(try f(Data(json.utf8)).text) }
+                catch let e as LLMError { return .failure(e) }
+                catch { return .failure(.malformed("\(error)")) }
+            }
+            func isEmpty(_ r: Result<String, LLMError>) -> Bool {
+                if case .failure(let e) = r, case .empty = e { return true }; return false
+            }
+            func isMalformed(_ r: Result<String, LLMError>) -> Bool {
+                if case .failure(let e) = r, case .malformed = e { return true }; return false
+            }
+
+            let oNormal = parse(#"{"choices":[{"message":{"content":"嗨"},"finish_reason":"stop"}]}"#, OpenAIResponse.reply)
+            check("wire.openai_normal", (try? oNormal.get()) == "嗨", "\(oNormal)")
+
+            let oReason = parse(#"{"choices":[{"message":{"content":"","reasoning_content":"想了想"},"finish_reason":"stop"}]}"#, OpenAIResponse.reply)
+            check("wire.openai_reasoning_fallback", (try? oReason.get()) == "想了想", "\(oReason)")
+
+            let oTrunc = parse(#"{"choices":[{"message":{"content":""},"finish_reason":"length"}]}"#, OpenAIResponse.reply)
+            check("wire.openai_truncated", isMalformed(oTrunc), "\(oTrunc)")
+
+            let oEmpty = parse(#"{"choices":[{"message":{"content":""},"finish_reason":"stop"}]}"#, OpenAIResponse.reply)
+            check("wire.openai_empty", isEmpty(oEmpty), "\(oEmpty)")
+
+            let aMulti = parse(#"{"content":[{"type":"text","text":"甲"},{"type":"text","text":"乙"}],"stop_reason":"end_turn"}"#, AnthropicResponse.reply)
+            check("wire.anthropic_multiblock", (try? aMulti.get()) == "甲乙", "\(aMulti)")
+
+            let aEmpty = parse(#"{"content":[],"stop_reason":"end_turn"}"#, AnthropicResponse.reply)
+            check("wire.anthropic_empty", isEmpty(aEmpty), "\(aEmpty)")
+
+            let guarded = OpenAIJSONGuard.ensureJSONMentioned("请只回复一个对象")
+            let preserved = OpenAIJSONGuard.ensureJSONMentioned("output JSON now")
+            check("wire.json_guard",
+                  guarded.range(of: "json", options: .caseInsensitive) != nil && preserved == "output JSON now",
+                  "guarded_has_json + preserved=\(preserved == "output JSON now")")
+
+            let encoded = (try? JSONEncoder().encode(JSONValue(Brain.heartbeatSchema)))
+                .flatMap { String(data: $0, encoding: .utf8) } ?? ""
+            check("wire.schema_jsonvalue", encoded.contains("mood") && encoded.contains("properties"),
+                  "encoded_len=\(encoded.count)")
+        }
+
         print(failures == 0 ? "=== 全部通过 ===" : "=== \(failures) 项失败 ===")
         exit(failures == 0 ? 0 : 1)
     }

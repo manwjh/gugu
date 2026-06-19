@@ -2,7 +2,9 @@ import Foundation
 import GuguKernel
 
 /// Minimal Anthropic Messages API client over URLSession (no SDK for Swift).
-/// Works against the relay channel (Anthropic-compatible shape). Default provider.
+/// Works against the relay channel (Anthropic-compatible shape). Selected by
+/// `api.provider: anthropic`. Wire models live in `LLMWire.swift`; parsing is
+/// the testable `AnthropicResponse.reply(from:)`. Also owns the batch path.
 @MainActor
 struct AnthropicClient: LLMClient {
     let baseURL: String
@@ -14,8 +16,6 @@ struct AnthropicClient: LLMClient {
         let resultURL: String?
     }
 
-    /// One messages.create call. `system` may carry cache_control.
-    /// `schema` (optional) forces structured JSON output.
     func create(
         model: String,
         maxTokens: Int,
@@ -24,24 +24,29 @@ struct AnthropicClient: LLMClient {
         schema: [String: Any]? = nil,
         policy: LLMCallPolicy = .chat
     ) async throws -> LLMReply {
-        var body: [String: Any] = [
-            "model": model,
-            "max_tokens": maxTokens,
-            "messages": messages,
-        ]
-        if let system {
-            body["system"] = [["type": "text", "text": system,
-                               "cache_control": ["type": "ephemeral"]]]
-        }
-        if let schema {
-            body["output_config"] = ["format": ["type": "json_schema", "schema": schema]]
-        }
+        let request = Self.buildRequest(model: model, maxTokens: maxTokens,
+                                        system: system, messages: messages, schema: schema)
         return try await LLMRetry.run(policy: policy) {
-            try await doRequest(body: body, timeout: policy.timeout)
+            try await doRequest(request, timeout: policy.timeout)
         }
     }
 
-    private func doRequest(body: [String: Any], timeout: TimeInterval) async throws -> LLMReply {
+    /// Assemble a typed Messages request (shared by `create` and the batch path).
+    static func buildRequest(model: String, maxTokens: Int, system: String?,
+                             messages: [[String: Any]], schema: [String: Any]?) -> AnthropicRequest {
+        AnthropicRequest(
+            model: model,
+            max_tokens: maxTokens,
+            system: system.map { [AnthropicRequest.SystemBlock(text: $0)] },
+            messages: messages.map {
+                AnthropicRequest.Message(role: $0["role"] as? String ?? "user",
+                                         content: $0["content"] as? String ?? "")
+            },
+            output_config: schema.map { AnthropicRequest.OutputConfig(schema: JSONValue($0)) }
+        )
+    }
+
+    private func doRequest(_ request: AnthropicRequest, timeout: TimeInterval) async throws -> LLMReply {
         guard let url = URL(string: "\(baseURL)/v1/messages") else {
             throw LLMError.malformed("bad url")
         }
@@ -51,28 +56,16 @@ struct AnthropicClient: LLMClient {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        req.httpBody = try JSONEncoder().encode(request)
 
-        let (data, code) = try await LLMTransport.send(req, label: "anthropic \(body["model"] as? String ?? "")")
-        let bodyText = String(data: data, encoding: .utf8) ?? ""
+        let (data, code) = try await LLMTransport.send(req, label: "anthropic \(request.model)")
         guard (200..<300).contains(code) else {
-            throw LLMError.http(code, bodyText)
+            throw LLMError.http(code, String(data: data, encoding: .utf8) ?? "")
         }
-        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let content = obj["content"] as? [[String: Any]] else {
-            throw LLMError.malformed(bodyText)
-        }
-        let text = content.compactMap { block -> String? in
-            (block["type"] as? String) == "text" ? block["text"] as? String : nil
-        }.joined()
-        let stop = obj["stop_reason"] as? String ?? "unknown"
-        // 200 但没有任何文本块:不静默返回空(下游会退化成"听到却没反应"),
-        // 抛可重试错误再试一次,与 OpenAIClient 的空响应处理对齐。
-        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            throw LLMError.empty("stop_reason=\(stop)")
-        }
-        return LLMReply(text: text)
+        return try AnthropicResponse.reply(from: data)
     }
+
+    // MARK: - Batch
 
     func createMessageBatch(
         customID: String,
@@ -82,25 +75,11 @@ struct AnthropicClient: LLMClient {
         messages: [[String: Any]],
         schema: [String: Any]? = nil
     ) async throws -> Batch {
-        var params: [String: Any] = [
-            "model": model,
-            "max_tokens": maxTokens,
-            "messages": messages,
-        ]
-        if let system {
-            params["system"] = [["type": "text", "text": system,
-                                 "cache_control": ["type": "ephemeral"]]]
-        }
-        if let schema {
-            params["output_config"] = ["format": ["type": "json_schema", "schema": schema]]
-        }
-        let body: [String: Any] = [
-            "requests": [[
-                "custom_id": customID,
-                "params": params,
-            ]],
-        ]
-        return try await doBatchRequest(method: "POST", path: "/v1/messages/batches", body: body)
+        let params = Self.buildRequest(model: model, maxTokens: maxTokens,
+                                       system: system, messages: messages, schema: schema)
+        let body = AnthropicBatchRequest(requests: [.init(custom_id: customID, params: params)])
+        return try await doBatchRequest(method: "POST", path: "/v1/messages/batches",
+                                        body: try JSONEncoder().encode(body))
     }
 
     func retrieveMessageBatch(id: String) async throws -> Batch {
@@ -124,7 +103,7 @@ struct AnthropicClient: LLMClient {
         return bodyText
     }
 
-    private func doBatchRequest(method: String, path: String, body: [String: Any]?) async throws -> Batch {
+    private func doBatchRequest(method: String, path: String, body: Data?) async throws -> Batch {
         guard let url = URL(string: "\(baseURL)\(path)") else {
             throw LLMError.malformed("bad url")
         }
@@ -134,24 +113,16 @@ struct AnthropicClient: LLMClient {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-        if let body {
-            req.httpBody = try JSONSerialization.data(withJSONObject: body)
-        }
+        req.httpBody = body
 
         let (data, code) = try await LLMTransport.send(req, label: "anthropic batch \(method)")
         let bodyText = String(data: data, encoding: .utf8) ?? ""
         guard (200..<300).contains(code) else {
             throw LLMError.http(code, bodyText)
         }
-        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let id = obj["id"] as? String else {
+        guard let resp = try? JSONDecoder().decode(AnthropicBatchResponse.self, from: data) else {
             throw LLMError.malformed(bodyText)
         }
-        let status = obj["processing_status"] as? String
-            ?? obj["status"] as? String
-            ?? "unknown"
-        let resultURL = obj["results_url"] as? String
-            ?? obj["result_url"] as? String
-        return Batch(id: id, processingStatus: status, resultURL: resultURL)
+        return Batch(id: resp.id, processingStatus: resp.resolvedStatus, resultURL: resp.resolvedResultURL)
     }
 }
