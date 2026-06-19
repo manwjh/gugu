@@ -76,6 +76,7 @@ final class Brain {
         if !skills.isEmpty { lines.append("你给自己总结过的经验:\n" + skills.joined(separator: "\n")) }
         let events = EventBus.shared.promptSummary()
         if !events.isEmpty { lines.append("最近发生的事:\n\(events)") }
+        lines.append(Perception.shared.summaryForBrain())   // 一致的"此刻"快照(六路感知收口)
         lines.append("\(rhythm);\(screen)")
         lines.append("你的状态:\(affect)")
         lines.append("现在你想干嘛?(多数时候不需要说话;说话必须基于上面真实观察到的东西)")

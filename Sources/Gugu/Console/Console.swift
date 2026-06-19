@@ -549,6 +549,7 @@ final class Console: NSObject, NSWindowDelegate {
             app.pet.perch(on: chatWindow.frame)
         }
         setChatLoading(true)
+        Perception.shared.heardOrTyped(text, via: "打字")
         EventBus.shared.post(kind: "chat", summary: L.eventChat(String(text.prefix(40))), weight: 0)
         app.affect.chatted()
         PetState.recordBondGain(Affect.bondGainChatted)

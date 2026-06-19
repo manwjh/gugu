@@ -19,6 +19,7 @@ final class GuguApp: NSObject, NSApplicationDelegate {
     var console: Console!
     var visionDebug: VisionDebugWindow!
     private var minuteTimer: Timer?
+    private var perceptionTimer: Timer?
 
     /// 本次会话是否已经吐过一条引导提示(每次启动至多一条,避免话痨)。
     private var hintShownThisSession = false
@@ -61,6 +62,7 @@ final class GuguApp: NSObject, NSApplicationDelegate {
         listener.startIfPossible()       // no-op unless owner enabled it
         scheduler.start()
         startMinuteLoop()
+        startPerceptionLoop()
         Paths.pruneOldEvents()
 
         Log.info("app", "咕咕醒了。\(budget.statusLine)")
@@ -100,6 +102,8 @@ final class GuguApp: NSObject, NSApplicationDelegate {
         voice.onWillSpeak = { [weak self] text in
             let seconds = min(8.0, max(1.4, Double(text.count) * 0.16 + 0.9))
             self?.listener.suppressInput(for: seconds)
+            Perception.shared.setSpeaking(true)
+            DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { Perception.shared.setSpeaking(false) }
         }
 
         // 听到唤醒词后的语音指令 → 走对话链路(和打字聊天同一路径)
@@ -199,6 +203,7 @@ final class GuguApp: NSObject, NSApplicationDelegate {
         // vision (opt-in): presence + smile → events the bird can react to
         visionSensor.onPresence = { [weak self] present in
             guard let self else { return }
+            Perception.shared.setOwnerVisible(present)
             if present {
                 self.affect.ownerReturned()
                 if self.pet.isSleeping && !self.affect.isSleepyTime { self.pet.wake() }
@@ -209,6 +214,7 @@ final class GuguApp: NSObject, NSApplicationDelegate {
         }
         visionSensor.onSmile = { [weak self] in
             guard let self else { return }
+            Perception.shared.sawExpression("smile")
             self.affect.petted()  // a smile warms the bird like a pat
             self.pet.bird.showBlush(true)
             self.pet.bird.showManpu(.love)
@@ -216,6 +222,7 @@ final class GuguApp: NSObject, NSApplicationDelegate {
             EventBus.shared.post(kind: "see_smile", summary: L.eventSeeSmile, weight: 18)
         }
         visionSensor.onExpression = { expression in
+            Perception.shared.sawExpression(expression.rawValue)
             switch expression {
             case .smile:
                 break // onSmile keeps the legacy smile behavior.
@@ -227,6 +234,7 @@ final class GuguApp: NSObject, NSApplicationDelegate {
         }
         visionSensor.onGesture = { [weak self] gesture in
             guard let self else { return }
+            Perception.shared.sawGesture(gesture.rawValue)
             switch gesture {
             case .wave:
                 self.pet.bird.flapWings(times: 4)
@@ -238,8 +246,17 @@ final class GuguApp: NSObject, NSApplicationDelegate {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in self?.pet.bird.tiltHead(false) }
             case .pointing:
                 self.pet.bird.peckOnce()
+            case .pointLeft:
+                self.pet.nudge(towardRight: false)
+                self.pet.bird.showManpu(.surprise)
+            case .pointRight:
+                self.pet.nudge(towardRight: true)
+                self.pet.bird.showManpu(.surprise)
             }
-            EventBus.shared.post(kind: gesture.eventKind, summary: gesture.summary, weight: 16)
+            // 指挥手势是连续控制,别刷事件流;其它手势照旧记一笔给脑子。
+            if gesture != .pointLeft, gesture != .pointRight {
+                EventBus.shared.post(kind: gesture.eventKind, summary: gesture.summary, weight: 16)
+            }
         }
         // 物品:不再逐个常驻上报(背景里的笔记本/键盘会刷屏、稀释主人模型)。
         // 改由下面 onVideoEvent 的"新出现/移动/消失"(新颖度)触发,只在变化时反应。
@@ -259,6 +276,7 @@ final class GuguApp: NSObject, NSApplicationDelegate {
             case .objectAppeared:
                 // 按"有意思程度"分级反应:动物→吃一惊、食物/杯子→啄、其它新东西→好奇。
                 let l = label ?? ""
+                Perception.shared.sawObject(l)
                 if ["猫", "狗", "鸟"].contains(l) {
                     self.pet.bird.showManpu(.surprise)
                     self.pet.bird.tiltHead(true)
@@ -285,7 +303,12 @@ final class GuguApp: NSObject, NSApplicationDelegate {
             }
             EventBus.shared.post(kind: event.eventKind, summary: event.summary(label: label), weight: weight)
         }
-        visionSensor.onDebug = { [weak self] d in self?.visionDebug.update(d) }
+        visionSensor.onDebug = { [weak self] d in
+            self?.visionDebug.update(d)
+            // 每帧的连续感知喂进上下文:在座 + 手的水平位置(镜像到主人视角:0左1右)。
+            Perception.shared.setOwnerVisible(d.facePresent)
+            Perception.shared.sawHand(x: d.handBox.map { 1 - $0.midX })
+        }
     }
 
     /// 打开/关闭视觉调试窗口(实时看摄像头的原始识别数值)。
@@ -298,6 +321,7 @@ final class GuguApp: NSObject, NSApplicationDelegate {
     private func handleVoiceCommand(_ command: String) {
         let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        Perception.shared.heardOrTyped(trimmed, via: "说")
         EventBus.shared.post(kind: "voice", summary: L.eventVoice(String(trimmed.prefix(40))), weight: 0)
         affect.chatted()
         PetState.recordBondGain(Affect.bondGainChatted)
@@ -509,6 +533,29 @@ final class GuguApp: NSObject, NSApplicationDelegate {
             }
         }
         RunLoop.main.add(minuteTimer!, forMode: .common)
+    }
+
+    /// 每 ~2.5s 刷新感知上下文里的环境型字段(鼠标/咕咕世界/电脑本体/情绪)。
+    private func startPerceptionLoop() {
+        perceptionTimer = Timer.scheduledTimer(withTimeInterval: 2.5, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                let g = self.pet.window.frame
+                let m = NSEvent.mouseLocation
+                let nearGugu = hypot(m.x - g.midX, m.y - g.midY) < 140
+                Perception.shared.setListening(self.listener.enabled)
+                Perception.shared.tickAmbient(
+                    mouseNearGugu: nearGugu,
+                    guguState: self.pet.state.rawValue,
+                    guguInRoom: self.pet.isInHome,
+                    frontApp: NSWorkspace.shared.frontmostApplication?.localizedName ?? "",
+                    rhythm: self.rhythmSensor.rhythm.displayName,
+                    lowPower: ProcessInfo.processInfo.isLowPowerModeEnabled,
+                    energy: self.affect.energy,
+                    valence: self.affect.valence)
+            }
+        }
+        RunLoop.main.add(perceptionTimer!, forMode: .common)
     }
 
     /// 打开/关闭小窝:开则咕咕飞入并被限制在框内;关则咕咕飞回桌面。
