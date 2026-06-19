@@ -296,14 +296,26 @@ final class Brain {
 
         // budget degrade: drop from conversation tier to the cheaper instinct tier when running hot
         let tier = budget.degradeLevel >= 1 ? config.instinct : config.conversation
-        let reply = try await client.create(
-            model: tier.id,
-            maxTokens: max(tier.maxTokens, 300),
-            system: systemPrompt,
-            messages: messages,
-            schema: Brain.chatSchema,
-            policy: .chat
-        )
+        let reply: LLMReply
+        do {
+            reply = try await client.create(
+                model: tier.id,
+                maxTokens: max(tier.maxTokens, 300),
+                system: systemPrompt,
+                messages: messages,
+                schema: Brain.chatSchema,
+                policy: .chat
+            )
+        } catch let e as LLMError {
+            // 200 但没产出 content(偶发,尤其富上下文下模型把话"想"在 reasoning 里):
+            // 咕咕用一个非语言小反应(歪头点头)回应,而不是弹通用报错——既不破活物感,
+            // 也不把"没答上"写进 chatHistory(避免污染后续轮次)。真错误(网络/超时/鉴权)仍上抛。
+            if case .empty = e {
+                Log.info("chat", "空内容降级:非语言回应(nod)")
+                return ChatResult(reply: "", action: "nod")
+            }
+            throw e
+        }
         budget.record(inputChars: personaText.count + messages.reduce(0) { $0 + (($1["content"] as? String)?.count ?? 0) },
                       outputChars: reply.text.count, tier: tier)
 
