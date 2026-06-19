@@ -7,7 +7,8 @@ enum BirdViewDirection: Equatable {
 }
 
 /// 漫符(manpu):漫画式情绪符号,在头顶临时弹出表达情绪。纯矢量绘制以贴合手绘画风。
-enum Manpu {
+/// rawValue(case 名)即动作进化里 `manpu` 基元的 kind 字符串,见 MoveLimits.validManpu。
+enum Manpu: String {
     case sweat      // 汗滴:尴尬 / 疲惫 / 无奈
     case anger      // 青筋(💢):生气 / 不爽
     case surprise   // 惊叹号:吃惊 / 被戳一跳

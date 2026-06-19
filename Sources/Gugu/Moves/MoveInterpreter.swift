@@ -121,6 +121,11 @@ enum MoveInterpreter {
         case .groom:
             return .run { bird.groomOnce() }
 
+        case .manpu:
+            // 情绪符号:瞬时触发,自己飘完淡出,不阻塞编排节奏。
+            let kind = step.kind.flatMap(Manpu.init(rawValue:))
+            return .run { if let kind { bird.showManpu(kind) } }
+
         case .none:
             // 未知 op 在校验阶段已被挡掉;运行期兜底为无操作。
             return .wait(forDuration: 0)

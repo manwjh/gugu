@@ -22,6 +22,7 @@ enum MetaOp: String, Codable, CaseIterable {
     case blush     // 脸红:on
     case peck      // 啄一下(无参手势)
     case groom     // 理毛(无参手势)
+    case manpu     // 冒一个情绪符号(瞬时触发):kind = sweat/anger/surprise/love/music/question/dizzy
 }
 
 /// 编排里的单步。字段全部可选,按 op 取用对应字段;未用到的忽略。
@@ -39,6 +40,7 @@ struct MoveStep: Codable, Equatable {
     var text: String?
     var dir: String?
     var on: Bool?
+    var kind: String?   // manpu:情绪符号种类
 }
 
 /// 校验/夹紧用的安全边界。改这里就能调节"进化空间"的大小。
@@ -56,6 +58,8 @@ enum MoveLimits {
     static let maxNameChars = 24
     static let maxTriggerChars = 40
     static let validDirs: Set<String> = ["front", "back", "side"]
+    /// manpu kind 白名单。必须镜像 `Manpu` 的 rawValue(本文件保持纯逻辑,不引用 SpriteKit 侧的枚举)。
+    static let validManpu: Set<String> = ["sweat", "anger", "surprise", "love", "music", "question", "dizzy"]
 }
 
 enum MoveValidationError: Error, CustomStringConvertible, Equatable {
@@ -65,6 +69,7 @@ enum MoveValidationError: Error, CustomStringConvertible, Equatable {
     case totalDurationExceeded(Double)
     case sayTooLong(Int)
     case invalidDirection(String)
+    case invalidManpu(String)
     case nameInvalid
     case triggerTooLong(Int)
 
@@ -76,6 +81,7 @@ enum MoveValidationError: Error, CustomStringConvertible, Equatable {
         case .totalDurationExceeded(let d): return "总时长过长(\(String(format: "%.1f", d))s > \(MoveLimits.maxTotalDuration)s)"
         case .sayTooLong(let n): return "台词过长(\(n) > \(MoveLimits.maxSayChars))"
         case .invalidDirection(let s): return "无效朝向: \(s)"
+        case .invalidManpu(let s): return "无效情绪符号: \(s)"
         case .nameInvalid: return "动作名非法(空或含路径分隔符)"
         case .triggerTooLong(let n): return "触发词过长(\(n) > \(MoveLimits.maxTriggerChars))"
         }
@@ -109,7 +115,7 @@ enum MetaActionValidator {
             case .hop:
                 // 蹦:上+下两程
                 return acc + 2 * min(max(0, s.dur ?? 0.16), MoveLimits.maxStepDuration)
-            case .peck, .groom, .say, .view, .tilt, .blush, .flap, .none:
+            case .peck, .groom, .say, .view, .tilt, .blush, .flap, .manpu, .none:
                 // 这些基元有自己的内部时长,这里给一个保守估计
                 return acc + max(s.dur ?? defaultDuration(for: op), 0)
             default:
@@ -147,6 +153,12 @@ enum MetaActionValidator {
                 let dir = raw.dir ?? ""
                 guard MoveLimits.validDirs.contains(dir) else {
                     throw MoveValidationError.invalidDirection(dir)
+                }
+            }
+            if op == .manpu {
+                let kind = raw.kind ?? ""
+                guard MoveLimits.validManpu.contains(kind) else {
+                    throw MoveValidationError.invalidManpu(kind)
                 }
             }
             clamped.append(clamp(raw))
