@@ -2,8 +2,8 @@ import Foundation
 
 /// All on-disk locations for Gugu. Everything lives under
 /// ~/Library/Application Support/Gugu/ as plain text the owner can edit.
-enum Paths {
-    static let root: URL = {
+package enum Paths {
+    package static let root: URL = {
         if let override = ProcessInfo.processInfo.environment["GUGU_HOME"],
            !override.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return URL(fileURLWithPath: override, isDirectory: true)
@@ -13,29 +13,29 @@ enum Paths {
             .appendingPathComponent("Library/Application Support/Gugu", isDirectory: true)
     }()
 
-    static let config     = root.appendingPathComponent("config.yaml")
-    static let persona    = root.appendingPathComponent("persona.md")
-    static let evolution  = root.appendingPathComponent("evolution.yaml")
-    static let state      = root.appendingPathComponent("state.json")
-    static let usage      = root.appendingPathComponent("usage.json")
-    static let schedulerState = root.appendingPathComponent("scheduler.json")
-    static let progressState = root.appendingPathComponent("progress.json")
-    static let dreamBatchState = root.appendingPathComponent("dream_batch.json")
-    static let pinnedMemory = root.appendingPathComponent("pinned.json")
-    static let homeState  = root.appendingPathComponent("home.json")
-    static let homePlatforms = root.appendingPathComponent("home_platforms.json")
-    static let memoryDir  = root.appendingPathComponent("memory", isDirectory: true)
-    static let skillsDir  = root.appendingPathComponent("skills", isDirectory: true)
-    static let movesDir   = root.appendingPathComponent("moves", isDirectory: true)
-    static let eventsDir  = root.appendingPathComponent("events", isDirectory: true)
-    static let modelsDir  = root.appendingPathComponent("models", isDirectory: true)
-    static let auditDir   = root.appendingPathComponent("audit", isDirectory: true)
-    static let proposals  = root.appendingPathComponent("proposals", isDirectory: true)
-    static let snapshots  = root.appendingPathComponent("snapshots", isDirectory: true)
-    static let chatLog    = root.appendingPathComponent("chat.jsonl")
-    static let logFile    = root.appendingPathComponent("gugu.log")
+    package static let config     = root.appendingPathComponent("config.yaml")
+    package static let persona    = root.appendingPathComponent("persona.md")
+    package static let evolution  = root.appendingPathComponent("evolution.yaml")
+    package static let state      = root.appendingPathComponent("state.json")
+    package static let usage      = root.appendingPathComponent("usage.json")
+    package static let schedulerState = root.appendingPathComponent("scheduler.json")
+    package static let progressState = root.appendingPathComponent("progress.json")
+    package static let dreamBatchState = root.appendingPathComponent("dream_batch.json")
+    package static let pinnedMemory = root.appendingPathComponent("pinned.json")
+    package static let homeState  = root.appendingPathComponent("home.json")
+    package static let homePlatforms = root.appendingPathComponent("home_platforms.json")
+    package static let memoryDir  = root.appendingPathComponent("memory", isDirectory: true)
+    package static let skillsDir  = root.appendingPathComponent("skills", isDirectory: true)
+    package static let movesDir   = root.appendingPathComponent("moves", isDirectory: true)
+    package static let eventsDir  = root.appendingPathComponent("events", isDirectory: true)
+    package static let modelsDir  = root.appendingPathComponent("models", isDirectory: true)
+    package static let auditDir   = root.appendingPathComponent("audit", isDirectory: true)
+    package static let proposals  = root.appendingPathComponent("proposals", isDirectory: true)
+    package static let snapshots  = root.appendingPathComponent("snapshots", isDirectory: true)
+    package static let chatLog    = root.appendingPathComponent("chat.jsonl")
+    package static let logFile    = root.appendingPathComponent("gugu.log")
 
-    static func bootstrap() throws {
+    package static func bootstrap() throws {
         let fm = FileManager.default
         for dir in [root, memoryDir, skillsDir, movesDir, eventsDir, modelsDir, auditDir, proposals, snapshots] {
             try fm.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -58,14 +58,14 @@ enum Paths {
         try? readmeText.write(to: modelsReadme, atomically: true, encoding: .utf8)
     }
 
-    static func eventsFile(for date: Date = Date()) -> URL {
+    package static func eventsFile(for date: Date = Date()) -> URL {
         let df = DateFormatter()
         df.dateFormat = "yyyy-MM-dd"
         return eventsDir.appendingPathComponent("\(df.string(from: date)).jsonl")
     }
 
     /// Delete event files older than 7 days (privacy: rolling window).
-    static func pruneOldEvents() {
+    package static func pruneOldEvents() {
         let fm = FileManager.default
         guard let files = try? fm.contentsOfDirectory(at: eventsDir, includingPropertiesForKeys: [.creationDateKey]) else { return }
         let cutoff = Date().addingTimeInterval(-7 * 86400)
@@ -77,7 +77,7 @@ enum Paths {
         }
     }
 
-    static func auditFile(for date: Date = Date()) -> URL {
+    package static func auditFile(for date: Date = Date()) -> URL {
         let df = DateFormatter()
         df.dateFormat = "yyyy-MM-dd"
         return auditDir.appendingPathComponent("\(df.string(from: date)).jsonl")
@@ -85,7 +85,7 @@ enum Paths {
 }
 
 /// Simple shared logger: prints to stdout and appends to gugu.log.
-enum Log {
+package enum Log {
     private static let df: DateFormatter = {
         let d = DateFormatter()
         d.dateFormat = "HH:mm:ss"
@@ -93,7 +93,7 @@ enum Log {
     }()
     private static let queue = DispatchQueue(label: "gugu.log")
 
-    static func info(_ tag: String, _ msg: String) {
+    package static func info(_ tag: String, _ msg: String) {
         let line = "[\(df.string(from: Date()))] [\(tag)] \(msg)"
         print(line)
         queue.async {

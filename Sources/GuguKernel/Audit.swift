@@ -6,8 +6,8 @@ import Foundation
 /// Foundational: `record` depends only on `Paths`, so it lives in Kernel and
 /// every layer can write audit lines downward. The human-facing `report` (which
 /// must read proposals/evolution state) stays up in Evolution as an extension.
-enum Audit {
-    static func record(kind: String, summary: String, detail: [String: String] = [:]) {
+package enum Audit {
+    package static func record(kind: String, summary: String, detail: [String: String] = [:]) {
         var obj: [String: Any] = [
             "t": ISO8601DateFormatter().string(from: Date()),
             "kind": kind,

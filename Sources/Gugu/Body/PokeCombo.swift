@@ -1,4 +1,5 @@
 import Foundation
+import GuguKernel
 
 /// 连击戳的递进反应——纯逻辑,便于测试。
 ///

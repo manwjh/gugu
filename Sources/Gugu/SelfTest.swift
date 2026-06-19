@@ -1,4 +1,5 @@
 import Foundation
+import GuguKernel
 
 /// Headless full-pipeline test: config → real heartbeat → chat → dream → budget.
 /// Exits 0 if every stage passes; prints a labeled transcript.

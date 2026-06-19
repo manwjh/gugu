@@ -1,4 +1,5 @@
 import Foundation
+import GuguKernel
 
 /// Minimal Anthropic Messages API client over URLSession (no SDK for Swift).
 /// Works against the relay channel (Anthropic-compatible shape). Default provider.

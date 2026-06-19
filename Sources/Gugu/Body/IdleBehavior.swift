@@ -1,4 +1,5 @@
 import Foundation
+import GuguKernel
 
 /// idle 时的"自娱自乐"行为选择——抽成纯逻辑,便于测试,也便于按心情调制。
 ///

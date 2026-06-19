@@ -1,4 +1,5 @@
 import AppKit
+import GuguKernel
 import Foundation
 
 /// App composition root: wires senses → affect → scheduler → brain → body.

@@ -8,19 +8,19 @@ import Foundation
 /// A value of `nil` deletes the key (used when a tier override is cleared so it
 /// falls back to the base model id). Keys not present in the file are inserted
 /// under their section (the section is created at the end if it doesn't exist).
-enum ConfigWriter {
+package enum ConfigWriter {
 
     /// Apply `changes` (dotted key -> value, or nil to delete) to the file at
     /// `url`, writing atomically. Order of `changes` decides insertion order for
     /// brand-new keys within a section.
-    static func update(_ url: URL, changes: [(key: String, value: String?)]) throws {
+    package static func update(_ url: URL, changes: [(key: String, value: String?)]) throws {
         let original = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
         let updated = apply(to: original, changes: changes)
         try updated.write(to: url, atomically: true, encoding: .utf8)
     }
 
     /// Pure text transform — exposed for testing without touching disk.
-    static func apply(to text: String, changes: [(key: String, value: String?)]) -> String {
+    package static func apply(to text: String, changes: [(key: String, value: String?)]) -> String {
         // Preserve the document's original line ending where detectable.
         var lines = text.components(separatedBy: "\n")
 

@@ -1,4 +1,5 @@
 import Foundation
+import GuguKernel
 
 /// OpenAI Chat Completions client for OpenAI-compatible vendors (DeepSeek's own
 /// API, local Ollama, SiliconFlow, etc.). Opt-in via `api.provider: openai`.

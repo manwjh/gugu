@@ -3,8 +3,10 @@ import Foundation
 /// Long-term memory: small markdown files the dream job rewrites nightly.
 /// Deliberately small & fuzzy — both for token economy and the pet's persona.
 @MainActor
-final class Memory {
-    enum MemoryError: Error, CustomStringConvertible {
+package final class Memory {
+    package init() {}
+
+    package enum MemoryError: Error, CustomStringConvertible {
         case unsupportedMemoryFile(String)
         case emptySkillName
         case writeFailed(String, Error)
@@ -13,7 +15,7 @@ final class Memory {
         case snapshotFailed(String, Error)
         case invalidPinnedFact(String)
 
-        var description: String {
+        package var description: String {
             switch self {
             case .unsupportedMemoryFile(let file): return "unsupported memory file: \(file)"
             case .emptySkillName: return "empty skill name"
@@ -26,10 +28,10 @@ final class Memory {
         }
     }
 
-    static let longTermFiles = ["owner.md", "projects.md", "self.md"]
+    package static let longTermFiles = ["owner.md", "projects.md", "self.md"]
 
     /// Combined memory digest for prompts, capped in length.
-    func digest(maxChars: Int = 500) -> String {
+    package func digest(maxChars: Int = 500) -> String {
         var parts: [String] = []
         let pinned = pinnedDigest()
         if !pinned.isEmpty { parts.append(pinned) }
@@ -49,7 +51,7 @@ final class Memory {
     /// The most recent append-only milestones from bond.md (newest last in file),
     /// so the pet remembers shared history (e.g. evolutions) without bloating the
     /// prompt with the full ever-growing log.
-    func recentBondMilestones(limit: Int = 3) -> String {
+    package func recentBondMilestones(limit: Int = 3) -> String {
         let url = Paths.memoryDir.appendingPathComponent("bond.md")
         guard let text = try? String(contentsOf: url, encoding: .utf8) else { return "" }
         let lines = text
@@ -60,7 +62,7 @@ final class Memory {
         return lines.suffix(limit).joined(separator: ";")
     }
 
-    func pinnedDigest() -> String {
+    package func pinnedDigest() -> String {
         let pinned = PinnedMemory.load()
         var facts: [String] = []
         if let preferred = pinned.owner.preferredName, !preferred.isEmpty {
@@ -75,7 +77,7 @@ final class Memory {
     }
 
     @discardableResult
-    func capturePinnedFact(from userText: String, source: String = "chat") -> PinnedMemory.Capture? {
+    package func capturePinnedFact(from userText: String, source: String = "chat") -> PinnedMemory.Capture? {
         guard let fact = PinnedMemoryExtractor.extract(from: userText) else { return nil }
         do {
             let capture = try applyPinnedFact(fact, source: source, rawText: userText)
@@ -90,7 +92,7 @@ final class Memory {
     }
 
     @discardableResult
-    func applyPinnedFact(_ fact: PinnedMemoryExtractor.Fact,
+    package func applyPinnedFact(_ fact: PinnedMemoryExtractor.Fact,
                          source: String = "chat",
                          rawText: String) throws -> PinnedMemory.Capture {
         switch fact {
@@ -107,7 +109,7 @@ final class Memory {
         }
     }
 
-    func write(file: String, content: String) {
+    package func write(file: String, content: String) {
         do {
             try writeRequired(file: file, content: content)
         } catch {
@@ -117,7 +119,7 @@ final class Memory {
         }
     }
 
-    func writeRequired(file: String, content: String) throws {
+    package func writeRequired(file: String, content: String) throws {
         guard Memory.longTermFiles.contains(file) else {
             throw MemoryError.unsupportedMemoryFile(file)
         }
@@ -134,7 +136,7 @@ final class Memory {
 
     /// Append a note the pet decided to remember (memory_note from heartbeat).
     /// These accumulate in a scratch file the dream job distills at night.
-    func appendNote(_ note: String) {
+    package func appendNote(_ note: String) {
         do {
             try appendNoteRequired(note)
         } catch {
@@ -144,7 +146,7 @@ final class Memory {
         }
     }
 
-    func appendNoteRequired(_ note: String, date: Date = Date()) throws {
+    package func appendNoteRequired(_ note: String, date: Date = Date()) throws {
         guard !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         let url = notesURL(for: date)
         let df = DateFormatter(); df.dateFormat = "HH:mm"
@@ -163,11 +165,11 @@ final class Memory {
         }
     }
 
-    func todayNotes() -> String {
+    package func todayNotes() -> String {
         notes(for: Date())
     }
 
-    func notes(for date: Date, includeLegacy: Bool = true) -> String {
+    package func notes(for date: Date, includeLegacy: Bool = true) -> String {
         var parts: [String] = []
         if let text = try? String(contentsOf: notesURL(for: date), encoding: .utf8),
            !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -181,7 +183,7 @@ final class Memory {
         return parts.joined(separator: "\n")
     }
 
-    func clearTodayNotes() {
+    package func clearTodayNotes() {
         do {
             try clearNotes(for: Date())
         } catch {
@@ -189,7 +191,7 @@ final class Memory {
         }
     }
 
-    func clearNotes(for date: Date, includeLegacy: Bool = true) throws {
+    package func clearNotes(for date: Date, includeLegacy: Bool = true) throws {
         let fm = FileManager.default
         for url in [notesURL(for: date)] + (includeLegacy ? [legacyNotesURL] : []) {
             guard fm.fileExists(atPath: url.path) else { continue }
@@ -202,7 +204,7 @@ final class Memory {
     }
 
     @discardableResult
-    func snapshotLongTermFiles(reason: String) throws -> [URL] {
+    package func snapshotLongTermFiles(reason: String) throws -> [URL] {
         let fm = FileManager.default
         let df = DateFormatter()
         df.dateFormat = "yyyyMMdd-HHmmss-SSS"
@@ -237,7 +239,7 @@ final class Memory {
 
     /// Pick up to 2 skills whose filename conditions match the current context.
     /// Matching is local & cheap: filename keywords vs hour/rhythm/weekday.
-    func activeSkills(rhythm: WorkRhythm) -> [String] {
+    package func activeSkills(rhythm: WorkRhythm) -> [String] {
         let fm = FileManager.default
         guard let files = try? fm.contentsOfDirectory(at: Paths.skillsDir, includingPropertiesForKeys: nil) else { return [] }
         let hour = Calendar.current.component(.hour, from: Date())
@@ -273,7 +275,7 @@ final class Memory {
     /// names dropped. Use-it-or-lose-it: a skill the pet keeps using stays;
     /// one it never reaches for fades, matching a small animal's memory.
     @discardableResult
-    func pruneStaleSkills(olderThanDays days: Int = 60, now: Date = Date()) -> [String] {
+    package func pruneStaleSkills(olderThanDays days: Int = 60, now: Date = Date()) -> [String] {
         let fm = FileManager.default
         guard let files = try? fm.contentsOfDirectory(at: Paths.skillsDir,
                                                       includingPropertiesForKeys: [.contentModificationDateKey]) else { return [] }
@@ -293,7 +295,7 @@ final class Memory {
         return dropped
     }
 
-    func addSkill(name: String, body: String) {
+    package func addSkill(name: String, body: String) {
         do {
             try addSkillRequired(name: name, body: body)
         } catch {
@@ -303,7 +305,7 @@ final class Memory {
         }
     }
 
-    func addSkillRequired(name: String, body: String) throws {
+    package func addSkillRequired(name: String, body: String) throws {
         let safe = sanitizedSkillName(name)
         guard !safe.isEmpty else { throw MemoryError.emptySkillName }
         let url = Paths.skillsDir.appendingPathComponent("\(safe).md")
@@ -317,12 +319,12 @@ final class Memory {
         }
     }
 
-    func skillCount() -> Int {
+    package func skillCount() -> Int {
         (try? FileManager.default.contentsOfDirectory(at: Paths.skillsDir, includingPropertiesForKeys: nil))?
             .filter { $0.pathExtension == "md" }.count ?? 0
     }
 
-    func notesURL(for date: Date) -> URL {
+    package func notesURL(for date: Date) -> URL {
         Paths.memoryDir.appendingPathComponent("notes-\(Self.dayString(for: date)).md")
     }
 
@@ -336,43 +338,43 @@ final class Memory {
         return String(pieces).trimmingCharacters(in: .whitespacesAndNewlines).prefixString(40)
     }
 
-    nonisolated static func dayString(for date: Date) -> String {
+    package nonisolated static func dayString(for date: Date) -> String {
         let df = DateFormatter()
         df.dateFormat = "yyyy-MM-dd"
         return df.string(from: date)
     }
 }
 
-struct PinnedMemory: Codable {
-    struct Owner: Codable {
-        var preferredName: String?
-        var names: [String]
+package struct PinnedMemory: Codable {
+    package struct Owner: Codable {
+        package var preferredName: String?
+        package var names: [String]
     }
 
-    struct Record: Codable {
-        var id: String
-        var kind: String
-        var value: String
-        var source: String
-        var rawText: String
-        var createdAt: String
+    package struct Record: Codable {
+        package var id: String
+        package var kind: String
+        package var value: String
+        package var source: String
+        package var rawText: String
+        package var createdAt: String
     }
 
-    struct Capture {
-        let kind: String
-        let value: String
-        let summary: String
+    package struct Capture {
+        package let kind: String
+        package let value: String
+        package let summary: String
     }
 
-    var schemaVersion: Int
-    var owner: Owner
-    var records: [Record]
+    package var schemaVersion: Int
+    package var owner: Owner
+    package var records: [Record]
 
-    static func empty() -> PinnedMemory {
+    package static func empty() -> PinnedMemory {
         PinnedMemory(schemaVersion: 1, owner: Owner(preferredName: nil, names: []), records: [])
     }
 
-    static func load() -> PinnedMemory {
+    package static func load() -> PinnedMemory {
         guard let data = try? Data(contentsOf: Paths.pinnedMemory),
               let memory = try? JSONDecoder().decode(PinnedMemory.self, from: data) else {
             return .empty()
@@ -380,7 +382,7 @@ struct PinnedMemory: Codable {
         return memory
     }
 
-    func save() throws {
+    package func save() throws {
         try FileManager.default.createDirectory(at: Paths.root, withIntermediateDirectories: true)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -388,7 +390,7 @@ struct PinnedMemory: Codable {
         try data.write(to: Paths.pinnedMemory, options: .atomic)
     }
 
-    mutating func rememberOwnerName(_ name: String, preferred: Bool, source: String, rawText: String) -> Capture {
+    package mutating func rememberOwnerName(_ name: String, preferred: Bool, source: String, rawText: String) -> Capture {
         let cleanName = Self.normalizedName(name)
         if !owner.names.contains(cleanName) {
             owner.names.append(cleanName)
@@ -412,7 +414,7 @@ struct PinnedMemory: Codable {
                        summary: summary)
     }
 
-    static func isValidName(_ value: String) -> Bool {
+    package static func isValidName(_ value: String) -> Bool {
         let name = normalizedName(value)
         guard (1...12).contains(name.count) else { return false }
         let rejected = ["开玩笑", "说这个", "不是", "在忙", "饿了", "困了", "开心", "生气", "主人"]
@@ -421,17 +423,17 @@ struct PinnedMemory: Codable {
         return true
     }
 
-    static func normalizedName(_ value: String) -> String {
+    package static func normalizedName(_ value: String) -> String {
         value.trimmingCharacters(in: CharacterSet(charactersIn: " 「」\"'：:，,。!！?？、\n\t"))
     }
 }
 
-enum PinnedMemoryExtractor {
-    enum Fact: Equatable {
+package enum PinnedMemoryExtractor {
+    package enum Fact: Equatable {
         case ownerName(name: String, preferred: Bool)
     }
 
-    static func extract(from text: String) -> Fact? {
+    package static func extract(from text: String) -> Fact? {
         let normalized = normalize(text)
         guard !normalized.isEmpty else { return nil }
 
@@ -500,17 +502,17 @@ enum PinnedMemoryExtractor {
 }
 
 /// Persistent pet state (stage, experience counters, bond).
-struct PetState: Codable {
-    var stage: String
-    var days_together: Int
-    var events_seen: Int
-    var interactions: Int
-    var bond: Double
-    var trust: Double
-    var born_at: String
-    var pending_stage: String?
+package struct PetState: Codable {
+    package var stage: String
+    package var days_together: Int
+    package var events_seen: Int
+    package var interactions: Int
+    package var bond: Double
+    package var trust: Double
+    package var born_at: String
+    package var pending_stage: String?
 
-    static func load() -> PetState {
+    package static func load() -> PetState {
         if let data = try? Data(contentsOf: Paths.state),
            let s = try? JSONDecoder().decode(PetState.self, from: data) {
             return s
@@ -521,7 +523,7 @@ struct PetState: Codable {
                         pending_stage: nil)
     }
 
-    func save() {
+    package func save() {
         do {
             try saveRequired()
         } catch {
@@ -529,7 +531,7 @@ struct PetState: Codable {
         }
     }
 
-    func saveRequired() throws {
+    package func saveRequired() throws {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data = try encoder.encode(self)
@@ -539,7 +541,7 @@ struct PetState: Codable {
     /// 原子读-改-写:load 最新盘上值 → 应用变更 → 立刻 save。
     /// 同步无挂起,确保不会用陈旧快照覆盖期间发生的其它写入。
     @discardableResult
-    static func mutate(_ body: (inout PetState) -> Void) -> PetState {
+    package static func mutate(_ body: (inout PetState) -> Void) -> PetState {
         var s = load()
         body(&s)
         s.save()
@@ -548,7 +550,7 @@ struct PetState: Codable {
 
     /// 同 mutate,但用 saveRequired() 抛出保存错误,供需要感知失败的调用方(如夜间结算)使用。
     @discardableResult
-    static func mutateRequired(_ body: (inout PetState) throws -> Void) throws -> PetState {
+    package static func mutateRequired(_ body: (inout PetState) throws -> Void) throws -> PetState {
         var s = load()
         try body(&s)
         try s.saveRequired()
@@ -557,7 +559,7 @@ struct PetState: Codable {
 
     /// Apply a small long-term bond increment and persist. PetState.bond is the
     /// single source of truth for bond (Affect no longer holds a copy).
-    static func recordBondGain(_ delta: Double) {
+    package static func recordBondGain(_ delta: Double) {
         mutate { $0.bond = min(1, $0.bond + delta) }
     }
 }

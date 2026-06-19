@@ -8,7 +8,7 @@ import Foundation
 /// Foundational value type: lives in Kernel so both the producer (RhythmSensor
 /// in Senses) and consumers (Memory.activeSkills, prompt builders) depend down
 /// on it rather than on each other.
-enum WorkRhythm: String {
+package enum WorkRhythm: String {
     case focused = "专注工作"     // sustained keyboard activity
     case busy = "忙碌操作"        // mixed dense input
     case breather = "歇口气"      // input stopped 3–5 min, mouse twitches
@@ -17,7 +17,7 @@ enum WorkRhythm: String {
     case agitated = "可能烦躁"    // mouse thrash heuristics
 
     /// Localized name for UI display. rawValue stays Chinese (used in LLM prompts).
-    @MainActor var displayName: String {
+    @MainActor package var displayName: String {
         switch self {
         case .focused: return L.rhythmFocused
         case .busy: return L.rhythmBusy

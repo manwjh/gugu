@@ -1,4 +1,5 @@
 import AVFoundation
+import GuguKernel
 import AppKit
 
 /// 本地语音合成(TTS)。用 AVSpeechSynthesizer,完全本地、零 token、零网络。

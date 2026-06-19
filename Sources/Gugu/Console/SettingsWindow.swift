@@ -1,4 +1,5 @@
 import AppKit
+import GuguKernel
 
 /// Simple settings form for the essentials people actually change: API URL, key,
 /// and model — plus a collapsible "Advanced" area for per-tier model overrides,

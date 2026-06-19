@@ -1,4 +1,5 @@
 import AppKit
+import GuguKernel
 
 /// Approving evolution proposals: opens the proposals folder, applies an approved
 /// proposal file, then refreshes everything (config out via app.reloadConfigFromDisk,

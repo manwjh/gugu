@@ -1,17 +1,17 @@
 import Foundation
 
-enum GrowthStage: String, CaseIterable, Codable {
+package enum GrowthStage: String, CaseIterable, Codable {
     case hatchling
     case fledgling
     case adult
     case spirit
 
-    init(rawStage: String) {
+    package init(rawStage: String) {
         self = GrowthStage(rawValue: rawStage) ?? .hatchling
     }
 
     @MainActor
-    var displayName: String {
+    package var displayName: String {
         switch self {
         case .hatchling: return L.stageHatchling
         case .fledgling: return L.stageFledgling
@@ -21,7 +21,7 @@ enum GrowthStage: String, CaseIterable, Codable {
     }
 
     @MainActor
-    var shortName: String {
+    package var shortName: String {
         switch self {
         case .hatchling: return L.stageShortHatchling
         case .fledgling: return L.stageShortFledgling
@@ -30,11 +30,11 @@ enum GrowthStage: String, CaseIterable, Codable {
         }
     }
 
-    var order: Int {
+    package var order: Int {
         GrowthStage.allCases.firstIndex(of: self) ?? 0
     }
 
-    var speechGuidance: String {
+    package var speechGuidance: String {
         switch self {
         case .hatchling: return L.speechGuidanceHatchling
         case .fledgling: return L.speechGuidanceFledgling
@@ -43,7 +43,7 @@ enum GrowthStage: String, CaseIterable, Codable {
         }
     }
 
-    var visualScale: CGFloat {
+    package var visualScale: CGFloat {
         switch self {
         case .hatchling: return 0.78
         case .fledgling: return 0.90
@@ -52,7 +52,7 @@ enum GrowthStage: String, CaseIterable, Codable {
         }
     }
 
-    var budgetMultiplier: Double {
+    package var budgetMultiplier: Double {
         switch self {
         case .hatchling: return 0.35
         case .fledgling: return 0.70
@@ -61,7 +61,7 @@ enum GrowthStage: String, CaseIterable, Codable {
         }
     }
 
-    static func adjustedDailyTokens(base: Int, stage: GrowthStage) -> Int {
+    package static func adjustedDailyTokens(base: Int, stage: GrowthStage) -> Int {
         max(1_000, Int(Double(base) * stage.budgetMultiplier))
     }
 }

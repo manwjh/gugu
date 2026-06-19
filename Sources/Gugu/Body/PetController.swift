@@ -1,4 +1,5 @@
 import AppKit
+import GuguKernel
 import SpriteKit
 
 /// Borderless transparent always-on-top window hosting the bird.

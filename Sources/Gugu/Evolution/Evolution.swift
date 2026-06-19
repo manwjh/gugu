@@ -1,4 +1,5 @@
 import Foundation
+import GuguKernel
 
 /// Local growth rules. This is deliberately file-based and conservative:
 /// memory/skills can grow automatically, but capability/persona changes only

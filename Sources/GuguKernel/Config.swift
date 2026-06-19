@@ -4,10 +4,10 @@ import Foundation
 /// nesting with two-space indent. Comments (#) and blank lines ignored.
 /// Values keep their raw string form; typed accessors convert on read.
 /// This deliberately avoids a third-party YAML dependency.
-struct MiniYAML {
-    private(set) var values: [String: String] = [:]   // "section.key" -> raw value
+package struct MiniYAML {
+    package private(set) var values: [String: String] = [:]   // "section.key" -> raw value
 
-    init(text: String) {
+    package init(text: String) {
         var section: String? = nil
         for rawLine in text.components(separatedBy: .newlines) {
             let noComment = MiniYAML.stripComment(rawLine)
@@ -55,14 +55,14 @@ struct MiniYAML {
         return out
     }
 
-    func str(_ key: String, _ def: String = "") -> String { values[key] ?? def }
-    func double(_ key: String, _ def: Double) -> Double { values[key].flatMap(Double.init) ?? def }
-    func int(_ key: String, _ def: Int) -> Int { values[key].flatMap(Int.init) ?? def }
-    func bool(_ key: String, _ def: Bool) -> Bool {
+    package func str(_ key: String, _ def: String = "") -> String { values[key] ?? def }
+    package func double(_ key: String, _ def: Double) -> Double { values[key].flatMap(Double.init) ?? def }
+    package func int(_ key: String, _ def: Int) -> Int { values[key].flatMap(Int.init) ?? def }
+    package func bool(_ key: String, _ def: Bool) -> Bool {
         guard let v = values[key]?.lowercased() else { return def }
         return v == "true" || v == "yes" || v == "on"
     }
-    func list(_ key: String) -> [String] {
+    package func list(_ key: String) -> [String] {
         guard let v = values[key] else { return [] }
         let inner = v.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
         return inner.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
@@ -72,60 +72,60 @@ struct MiniYAML {
 /// One model tier (L2 instinct / L3 conversation / L4 dream). Each tier names a
 /// model id and its output cap. Tiers may all point at the same model id — the
 /// split is about call frequency and token caps, not necessarily distinct models.
-struct ModelTier {
-    var name: String      // "instinct" / "conversation" / "dream", for metering
-    var id: String
-    var maxTokens: Int
+package struct ModelTier {
+    package var name: String      // "instinct" / "conversation" / "dream", for metering
+    package var id: String
+    package var maxTokens: Int
 }
 
 /// Loaded application configuration. Re-loadable at runtime (hot reload).
-struct Config {
-    var apiURL: String
-    var apiKey: String
+package struct Config {
+    package var apiURL: String
+    package var apiKey: String
     /// Wire protocol: "anthropic" (default, Messages API) or "openai"
     /// (Chat Completions, for OpenAI-compatible vendors).
-    var apiProvider: String
+    package var apiProvider: String
 
     /// L2 心跳。
-    var instinct: ModelTier
+    package var instinct: ModelTier
     /// L3 对话。
-    var conversation: ModelTier
+    package var conversation: ModelTier
     /// L4 梦境。
-    var dream: ModelTier
+    package var dream: ModelTier
     /// 可选「灵光」层:择机临时借用的更强模型,只在罕见高价值时机用一次,带每日上限+冷却。
     /// id 为空表示未配置——此时一切行为与原来完全一致(零成本、零变化)。
-    var spark: ModelTier
+    package var spark: ModelTier
     /// 灵光模型每天最多用几次(0 或 spark.id 为空都表示禁用)。
-    var sparkDailyLimit: Int
+    package var sparkDailyLimit: Int
     /// 两次灵光之间的最小冷却(秒)。
-    var sparkCooldown: TimeInterval
+    package var sparkCooldown: TimeInterval
 
     /// 灵光层是否启用(配置了 id 且每日上限 > 0)。
-    var sparkEnabled: Bool { !spark.id.isEmpty && sparkDailyLimit > 0 }
+    package var sparkEnabled: Bool { !spark.id.isEmpty && sparkDailyLimit > 0 }
 
-    var dailyTokens: Int
-    var heartbeatMin: TimeInterval
-    var heartbeatMax: TimeInterval
-    var freezeWhenFocused: Bool
+    package var dailyTokens: Int
+    package var heartbeatMin: TimeInterval
+    package var heartbeatMax: TimeInterval
+    package var freezeWhenFocused: Bool
 
-    var senseScreen: Bool
-    var senseInputRhythm: Bool
-    var blacklistApps: [String]
+    package var senseScreen: Bool
+    package var senseInputRhythm: Bool
+    package var blacklistApps: [String]
 
-    var toolNotes: Bool
-    var toolReminders: Bool
-    var toolLocalNotifications: Bool
+    package var toolNotes: Bool
+    package var toolReminders: Bool
+    package var toolLocalNotifications: Bool
     /// 联网搜索权限。框架就绪但默认关、且当前只记录请求不真正出网(见 LocalToolExecutor)。
-    var toolWebSearch: Bool
+    package var toolWebSearch: Bool
 
-    var dreamUseBatch: Bool
+    package var dreamUseBatch: Bool
 
-    var petName: String
+    package var petName: String
 
     /// UI language: "en" or "zh". Default "en".
-    var language: String
+    package var language: String
 
-    static func load() -> Config {
+    package static func load() -> Config {
         let text = (try? String(contentsOf: Paths.config, encoding: .utf8)) ?? ""
         let y = MiniYAML(text: text)
         // Shared base model id; each tier may override it with its own id.
@@ -170,7 +170,7 @@ struct Config {
     }
 
     /// Write factory defaults on first launch (never overwrites user edits).
-    static func writeDefaultsIfMissing(apiURL: String, apiKey: String) throws {
+    package static func writeDefaultsIfMissing(apiURL: String, apiKey: String) throws {
         let fm = FileManager.default
         if !fm.fileExists(atPath: Paths.config.path) {
             let cfg = """
@@ -245,8 +245,8 @@ struct Config {
     }
 }
 
-enum DefaultFiles {
-    static let persona = """
+package enum DefaultFiles {
+    package static let persona = """
     <!-- core 不可变内核:程序禁止改写此段 -->
     你是\("咕咕"),一只活在主人 macOS 桌面上的小鸟。安全边界:诚实;不伤害主人利益;不假装看到了没观察到的东西;不绕过主人的授权做事。
     <!-- /core -->
@@ -267,7 +267,7 @@ enum DefaultFiles {
     - 深夜主人还在工作,你可以心疼,但表达要轻
     """
 
-    static let evolution = """
+    package static let evolution = """
     # 形态定义(由低到高);当前形态见 state.json
     stages:
       hatchling:
@@ -288,7 +288,7 @@ enum DefaultFiles {
         unlock_days: 60
     """
 
-    static let initialState = """
+    package static let initialState = """
     {"stage":"hatchling","days_together":0,"events_seen":0,"interactions":0,"bond":0.1,"trust":0.2,"born_at":"\(ISO8601DateFormatter().string(from: Date()))","pending_stage":null}
     """
 }

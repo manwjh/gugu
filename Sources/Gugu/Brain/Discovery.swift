@@ -1,4 +1,5 @@
 import Foundation
+import GuguKernel
 
 /// 隐藏机制的渐进披露:咕咕在合适的时机,用自己的口吻,一次只透露一个玩法。
 ///

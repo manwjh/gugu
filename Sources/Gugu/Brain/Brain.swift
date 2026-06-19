@@ -1,4 +1,5 @@
 import Foundation
+import GuguKernel
 
 /// The heartbeat decision returned by L2.
 struct HeartbeatDecision {

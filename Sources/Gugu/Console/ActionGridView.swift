@@ -1,4 +1,5 @@
 import AppKit
+import GuguKernel
 
 // MARK: - ActionGridView (multi-column grid of action buttons for a menu item)
 

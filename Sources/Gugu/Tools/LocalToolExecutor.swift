@@ -1,4 +1,5 @@
 import Foundation
+import GuguKernel
 
 /// Local-only tool layer. It never performs network requests; tools either
 /// append small JSONL records under Paths.root or return a clear denial.

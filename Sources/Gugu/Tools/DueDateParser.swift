@@ -1,4 +1,5 @@
 import Foundation
+import GuguKernel
 
 /// Turns the fuzzy Chinese time words produced by LocalCommandParser
 /// ("明天" / "今晚" / "周一"…) into a concrete fire time, using fixed,

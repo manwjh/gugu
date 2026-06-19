@@ -1,4 +1,5 @@
 import Foundation
+import GuguKernel
 
 /// 一个"学会的动作":名字 + 触发词 + 一段元动作编排。
 ///

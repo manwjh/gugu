@@ -1,4 +1,5 @@
 import AppKit
+import GuguKernel
 @preconcurrency import AVFoundation
 
 /// 可视化视觉调试窗口:本机摄像头实时画面 + 检测框 + 标签(目标检测 demo 那种)。

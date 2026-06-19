@@ -1,4 +1,5 @@
 import Foundation
+import GuguKernel
 
 /// Local emotion scalars. Zero-cost, real-time, never touch the LLM directly;
 /// they drive L0 presentation and one line of the heartbeat prompt.

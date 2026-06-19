@@ -1,4 +1,5 @@
 import AppKit
+import GuguKernel
 
 /// 与宠物行为无关的 CGWindowList 工具:查询前台窗口 / 指定窗口的几何。
 /// 保持为 PetController 的 static 扩展,调用点(PetController.frontmostWindowInfo()

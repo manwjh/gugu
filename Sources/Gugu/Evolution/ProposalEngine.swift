@@ -1,4 +1,5 @@
 import Foundation
+import GuguKernel
 
 /// Applies owner-approved self-modification proposals. Supported proposal files
 /// are deliberately narrow and declarative:

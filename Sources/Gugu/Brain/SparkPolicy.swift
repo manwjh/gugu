@@ -1,4 +1,5 @@
 import Foundation
+import GuguKernel
 
 /// 「灵光」择机策略——纯逻辑,便于测试。
 ///

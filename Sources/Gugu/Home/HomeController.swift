@@ -1,4 +1,5 @@
 import AppKit
+import GuguKernel
 import Foundation
 
 /// 小窝的所有权与生命周期:打开/关闭、暴露当前 frame、把拖动/缩放变化通知外部。

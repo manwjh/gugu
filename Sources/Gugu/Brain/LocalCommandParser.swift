@@ -1,4 +1,5 @@
 import Foundation
+import GuguKernel
 
 /// Small deterministic parser for owner-directed local actions. It is not a
 /// replacement for LLM understanding; it catches explicit commands so permitted

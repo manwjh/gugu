@@ -1,4 +1,5 @@
 import Foundation
+import GuguKernel
 
 /// 元动作(meta-action):动作进化的安全沙盒。
 ///

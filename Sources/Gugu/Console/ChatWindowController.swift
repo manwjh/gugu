@@ -1,4 +1,5 @@
 import AppKit
+import GuguKernel
 
 /// The floating chat input panel: build, position near the pet, send a line to the
 /// brain, and surface the reply/aside. Cross-module dispatch (Brain.chat, affect,

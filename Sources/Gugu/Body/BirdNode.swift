@@ -1,4 +1,5 @@
 import SpriteKit
+import GuguKernel
 
 enum BirdViewDirection: Equatable {
     case front

@@ -1,4 +1,5 @@
 import AppKit
+import GuguKernel
 import SpriteKit
 
 /// 平台/落地碰撞:房间内主人画的平台(归一化坐标),咕咕在其上站/走/栖/落。

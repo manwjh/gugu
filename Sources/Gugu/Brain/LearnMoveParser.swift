@@ -1,4 +1,5 @@
 import Foundation
+import GuguKernel
 
 /// 识别"主人想教咕咕一个新动作"的请求(本地、零成本)。
 ///

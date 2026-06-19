@@ -1,4 +1,5 @@
 import SpriteKit
+import GuguKernel
 
 /// 把一段元动作编排(`[MoveStep]`)翻译成跑在 `BirdNode` 上的 `SKAction`。
 ///

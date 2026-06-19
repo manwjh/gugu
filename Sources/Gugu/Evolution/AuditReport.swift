@@ -1,4 +1,5 @@
 import Foundation
+import GuguKernel
 
 /// Human-facing audit report. Kept in Evolution (not Kernel) because it reads
 /// pending proposals + evolution state to build the summary — i.e. it depends

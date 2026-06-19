@@ -1,4 +1,5 @@
 import Foundation
+import GuguKernel
 
 /// Local token metering. The relay's usage numbers are unreliable (returns 0),
 /// so we estimate tokens as ceil(chars / 3.2) — conservative for mixed CJK/ASCII

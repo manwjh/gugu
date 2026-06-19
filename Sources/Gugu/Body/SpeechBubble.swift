@@ -1,4 +1,5 @@
 import AppKit
+import GuguKernel
 
 /// Floating rounded speech bubble in its own panel, follows the pet.
 @MainActor

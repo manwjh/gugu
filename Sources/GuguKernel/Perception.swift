@@ -10,8 +10,8 @@ import AppKit
 /// 环境型字段由 GuguApp 周期 tick 刷新(前台 App/节奏/鼠标/咕咕位置/时段/电量)。
 /// 瞬时字段带时间戳,过期自动视为"无"。
 @MainActor
-final class Perception {
-    static let shared = Perception()
+package final class Perception {
+    package static let shared = Perception()
 
     // MARK: 视觉(全部出自 VisionSensor 每帧连续快照 VisionFrame,语义已平滑)
     private var _ownerVisible = false
@@ -20,33 +20,33 @@ final class Perception {
     private var gesture: (v: String, t: Date)?
     private var objects: [String: Date] = [:]         // 物品中文名 -> 最近看见时间
     /// 手的水平位置(0=左 1=右,**主人视角**,已镜像);供"跟随手"等共享坐标交互用。
-    private(set) var handX: CGFloat?
+    package private(set) var handX: CGFloat?
     private var handSeen = Date.distantPast
     /// 摄像头关闭/无帧时视觉即视为"无"——避免拿陈旧的"看得见主人"骗脑子。
     private var visionFresh: Bool { Date().timeIntervalSince(lastVisionFrame) < 1.5 }
-    var ownerVisible: Bool { _ownerVisible && visionFresh }
+    package var ownerVisible: Bool { _ownerVisible && visionFresh }
 
     // MARK: 语音 / 文字
-    private(set) var listening = false
-    private(set) var speaking = false
-    private(set) var chatOpen = false
+    package private(set) var listening = false
+    package private(set) var speaking = false
+    package private(set) var chatOpen = false
     private var lastUserText: (v: String, via: String, t: Date)?   // 最近一句(语音/打字)
 
     // MARK: 鼠标 / 二维世界 / 电脑本体(tick 刷新)
-    private(set) var mouseNearGugu = false
-    private(set) var guguState = "idle"
-    private(set) var guguInRoom = false
-    private(set) var frontApp = ""
-    private(set) var rhythm = ""
-    private(set) var lowPower = false
-    private(set) var energy = 0.7
-    private(set) var valence = 0.0
+    package private(set) var mouseNearGugu = false
+    package private(set) var guguState = "idle"
+    package private(set) var guguInRoom = false
+    package private(set) var frontApp = ""
+    package private(set) var rhythm = ""
+    package private(set) var lowPower = false
+    package private(set) var energy = 0.7
+    package private(set) var valence = 0.0
 
     // MARK: - 感官推送
 
     /// 视觉:每帧一次的连续快照(VisionSensor.onFrame)。视觉字段的**唯一入口**——
     /// 不再由零散的去抖事件回调喂养,保证"此刻看见什么"前后一致、随相机开关进退。
-    func updateVision(present: Bool, expression: String?, gesture: String?,
+    package func updateVision(present: Bool, expression: String?, gesture: String?,
                       handX: CGFloat?, objectsNow: [String]) {
         let now = Date()
         lastVisionFrame = now
@@ -58,18 +58,18 @@ final class Perception {
         for o in objectsNow { objects[o] = now }            // 稳定在场集刷新;移走后靠时间衰减
     }
 
-    func heardOrTyped(_ text: String, via: String) {
+    package func heardOrTyped(_ text: String, via: String) {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return }
         lastUserText = (String(t.prefix(40)), via, Date())
     }
-    func setListening(_ b: Bool) { listening = b }
-    func setSpeaking(_ b: Bool) { speaking = b }
-    func setChatOpen(_ b: Bool) { chatOpen = b }
+    package func setListening(_ b: Bool) { listening = b }
+    package func setSpeaking(_ b: Bool) { speaking = b }
+    package func setChatOpen(_ b: Bool) { chatOpen = b }
 
     // MARK: - 环境刷新(GuguApp 周期调用)
 
-    func tickAmbient(mouseNearGugu: Bool, guguState: String, guguInRoom: Bool,
+    package func tickAmbient(mouseNearGugu: Bool, guguState: String, guguInRoom: Bool,
                      frontApp: String, rhythm: String, lowPower: Bool,
                      energy: Double, valence: Double) {
         self.mouseNearGugu = mouseNearGugu
@@ -85,12 +85,12 @@ final class Perception {
     // MARK: - 派生
 
     /// 当前手势(若新鲜)。供"指挥/跟随"等实时交互直接读,免走事件流。
-    func freshGesture(within: TimeInterval = 1.0) -> String? {
+    package func freshGesture(within: TimeInterval = 1.0) -> String? {
         guard let g = gesture, Date().timeIntervalSince(g.t) < within else { return nil }
         return g.v
     }
 
-    var handFresh: Bool { Date().timeIntervalSince(handSeen) < 0.6 }
+    package var handFresh: Bool { Date().timeIntervalSince(handSeen) < 0.6 }
 
     private static func timeOfDay(_ now: Date = Date()) -> String {
         switch Calendar.current.component(.hour, from: now) {
@@ -103,7 +103,7 @@ final class Perception {
     }
 
     /// 给脑子(心跳)的一段连贯"此刻"描述——一致快照,而非散落的事件行。
-    func summaryForBrain(now: Date = Date()) -> String {
+    package func summaryForBrain(now: Date = Date()) -> String {
         var bits: [String] = []
         bits.append(Perception.timeOfDay(now))
         if !frontApp.isEmpty { bits.append("前台 \(frontApp)") }

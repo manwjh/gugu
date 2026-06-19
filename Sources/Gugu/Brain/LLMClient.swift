@@ -1,4 +1,5 @@
 import Foundation
+import GuguKernel
 
 /// Shared result/error types and the protocol both LLM transports implement.
 /// Two providers conform: `AnthropicClient` (Messages API, the default) and

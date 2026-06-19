@@ -1,4 +1,5 @@
 import Foundation
+import GuguKernel
 
 struct DreamBatchState: Codable {
     var batchID: String

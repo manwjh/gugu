@@ -1,4 +1,5 @@
 import AppKit
+import GuguKernel
 
 /// 小窝(home)的半透明容器窗口。borderless、透明底,层级低于咕咕窗口(.statusBar)
 /// 因此咕咕始终画在小窝之上。窗口体内可拖动移动,右下角 grip 可缩放。

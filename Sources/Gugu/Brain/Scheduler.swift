@@ -1,4 +1,5 @@
 import Foundation
+import GuguKernel
 
 /// Heartbeat scheduler: threshold-triggered, never polling.
 /// Curiosity accumulates from events; a heartbeat fires when over threshold

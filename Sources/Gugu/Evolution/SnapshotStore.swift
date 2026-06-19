@@ -1,4 +1,5 @@
 import Foundation
+import GuguKernel
 
 /// Local backups created before proposal application. Restore is explicit and
 /// only targets first-class editable files.

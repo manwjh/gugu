@@ -1,4 +1,5 @@
 import Foundation
+import GuguKernel
 import CoreGraphics
 import AppKit
 

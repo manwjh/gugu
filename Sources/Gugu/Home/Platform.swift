@@ -1,4 +1,5 @@
 import Foundation
+import GuguKernel
 import CoreGraphics
 
 /// 房间内的平台(横杠/斜坡):主人画的线段,咕咕可以站上去、跳、perch。

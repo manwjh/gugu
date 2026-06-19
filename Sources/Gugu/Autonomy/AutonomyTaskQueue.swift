@@ -1,4 +1,5 @@
 import Foundation
+import GuguKernel
 
 /// Local, offline-first queue for owner-approved autonomous work.
 /// Stored as JSON Lines at `Paths.root/autonomy_tasks.jsonl`.

@@ -1,4 +1,5 @@
 import AppKit
+import GuguKernel
 
 /// Menu-bar presence: status, poke, chat entry, audit, quit.
 @MainActor

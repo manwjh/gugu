@@ -1,4 +1,5 @@
 import AppKit
+import GuguKernel
 import SpriteKit
 
 /// Offscreen render of the bird in a given pose to a PNG — no screen-capture
