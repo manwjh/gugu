@@ -307,7 +307,10 @@ final class Brain {
         budget.record(inputChars: personaText.count + messages.reduce(0) { $0 + (($1["content"] as? String)?.count ?? 0) },
                       outputChars: reply.text.count, tier: tier)
 
-        var replyText = reply.text
+        // Default empty (not reply.text): chat always requests structured JSON,
+        // so if extraction fails we degrade to an action-only / blank reply rather
+        // than leaking raw model output (e.g. chain-of-thought) into the bubble.
+        var replyText = ""
         var aside = ""
         var action = "idle"
         if let data = Brain.extractJSON(reply.text)?.data(using: .utf8),

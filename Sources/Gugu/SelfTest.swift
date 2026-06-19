@@ -1027,8 +1027,10 @@ func runOfflineSelfTest() {
             let oNormal = parse(#"{"choices":[{"message":{"content":"嗨"},"finish_reason":"stop"}]}"#, OpenAIResponse.reply)
             check("wire.openai_normal", (try? oNormal.get()) == "嗨", "\(oNormal)")
 
+            // content empty + reasoning_content present → MUST NOT surface the
+            // chain-of-thought; it's an empty reply (retriable), not the answer.
             let oReason = parse(#"{"choices":[{"message":{"content":"","reasoning_content":"想了想"},"finish_reason":"stop"}]}"#, OpenAIResponse.reply)
-            check("wire.openai_reasoning_fallback", (try? oReason.get()) == "想了想", "\(oReason)")
+            check("wire.openai_reasoning_not_leaked", isEmpty(oReason), "\(oReason)")
 
             let oTrunc = parse(#"{"choices":[{"message":{"content":""},"finish_reason":"length"}]}"#, OpenAIResponse.reply)
             check("wire.openai_truncated", isMalformed(oTrunc), "\(oTrunc)")

@@ -83,29 +83,31 @@ struct OpenAIResponse: Decodable {
     }
     struct Message: Decodable {
         let content: String?
+        // Chain-of-thought. Decoded so the wire shape is documented, but it is
+        // the model's *thinking*, never the answer — must NOT be surfaced as the
+        // reply (doing so leaked "（王哥又在喊我...）"-style monologue into the
+        // bubble). Locked by the `wire.openai_reasoning_not_leaked` selftest.
         let reasoning_content: String?
         let reasoning: String?
     }
 
-    /// Decode + extract visible text into an `LLMReply`, or throw the specific
-    /// `LLMError`. Pure & offline-testable. Handles: reasoning-only replies
-    /// (content empty, answer in `reasoning_content`), reasoning-budget
-    /// truncation (`finish_reason == length` with empty content), and empty.
+    /// Decode + extract the visible answer (`content` only) into an `LLMReply`,
+    /// or throw the specific `LLMError`. `reasoning_content` is deliberately
+    /// ignored — it's the model's chain-of-thought, not the answer. Empty
+    /// content with `finish_reason == length` means the reasoning budget was
+    /// exhausted before any output (raise max_tokens); otherwise it's a plain
+    /// empty reply (retriable). Pure & offline-testable.
     static func reply(from data: Data) throws -> LLMReply {
         guard let resp = try? JSONDecoder().decode(OpenAIResponse.self, from: data),
               let choice = resp.choices.first else {
             throw LLMError.malformed(String(data: data, encoding: .utf8) ?? "")
         }
-        var text = choice.message.content ?? ""
-        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let reasoning = choice.message.reasoning_content ?? choice.message.reasoning ?? ""
-            if !reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { text = reasoning }
-        }
+        let text = choice.message.content ?? ""
         let stop = choice.finish_reason ?? "unknown"
-        if stop == "length" && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            throw LLMError.malformed("truncated: reasoning consumed the token budget before any output (raise max_tokens)")
-        }
         if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if stop == "length" {
+                throw LLMError.malformed("truncated: reasoning consumed the token budget before any output (raise max_tokens)")
+            }
             throw LLMError.empty("finish_reason=\(stop)")
         }
         return LLMReply(text: text)
