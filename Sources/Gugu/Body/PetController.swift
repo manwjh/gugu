@@ -61,6 +61,7 @@ enum PetBodyState: String {
     case idle, walk, approach, retreat, perch, flyingToPerch
     case sleep, dance, stare, dragged, falling
     case enteringHome
+    case followHand   // 跟随主人的手(共享坐标:走向手的水平位置)
 }
 
 private enum SupportSurface {
@@ -120,6 +121,7 @@ final class PetController: NSObject {
     private var dragGrabOffset = CGPoint.zero  // 抓取点相对窗口原点的偏移,拖拽时保持不瞬移
     private var stateUntil: Date = .distantPast
     private var fallFromDrag = false          // distinguishes owner-throw from perch-fall
+    private var gracefulFlight = false        // 主动飞起(手势令)→ 落地轻盈,不当摔倒翻滚
     private var lastPerchAttempt = Date.distantPast
     private var pokeCombo = PokeCombo()       // 连击戳计数(递进反应)
 
@@ -232,6 +234,7 @@ final class PetController: NSObject {
 
     private func physicsTick(dt: CGFloat) {
         var origin = window.frame.origin
+        updateHandFollow()   // 主人指向→进入/退出"跟随手"
 
         switch state {
         case .falling:
@@ -328,16 +331,39 @@ final class PetController: NSObject {
                 window.setFrameOrigin(origin)
             }
 
+        case .followHand:
+            // 走向手的水平位置(共享坐标:handX 0=左 1=右,已是主人视角)。手离开就回 idle。
+            let world = currentWorld
+            guard Perception.shared.handFresh, let hx = Perception.shared.handX else {
+                handFollowArmed = false
+                bird.position.y = feetY
+                transition(to: .idle)
+                break
+            }
+            let targetX = world.minX + hx * (world.maxX - world.minX)
+            origin.y = world.groundY
+            let dx = targetX - origin.x
+            if abs(dx) > 6 {
+                setFacing(right: dx > 0)
+                let speed: CGFloat = 160
+                origin.x += (dx > 0 ? 1 : -1) * min(abs(dx), speed * dt)
+                origin.x = max(world.minX, min(origin.x, world.maxX))
+                bird.position.y = feetY + abs(sin(Date().timeIntervalSince1970 * 10)) * 3
+            } else {
+                bird.position.y = feetY
+            }
+            window.setFrameOrigin(origin)
+
         default:
             break
         }
-
         bubble.follow(petWindow: window, avoiding: speechAvoidanceFrame)
     }
 
     private func land() {
-        let hard = abs(vel.dx) > 300 || vel.dy < -900
+        let hard = !gracefulFlight && (abs(vel.dx) > 300 || vel.dy < -900)
         vel = .zero
+        gracefulFlight = false
         if hard {
             // tumble: full spin + squash
             bird.run(.sequence([
@@ -441,6 +467,26 @@ final class PetController: NSObject {
         bird.flapWings(times: 6, fast: true)
         vel = CGVector(dx: CGFloat.random(in: -40...40), dy: 0)
         transition(to: .falling)
+    }
+
+    /// 跟随手:主人用食指指向(在画面里)→ 咕咕走向手的水平位置(共享坐标,天然不猜左右);
+    /// 手离开画面就停。读 Perception(统一感知上下文),每帧由 physicsTick 驱动。
+    private var handFollowArmed = false
+
+    private func updateHandFollow() {
+        let free = (state == .idle || state == .walk || state == .followHand)
+        // 指向(食指)且手在画面里 → 武装跟随(只需一帧指向即可,之后靠手在不在维持)。
+        if free, Perception.shared.handFresh,
+           Perception.shared.freshGesture(within: 0.9) == VisionGesture.pointing.rawValue {
+            handFollowArmed = true
+        }
+        guard handFollowArmed else { return }
+        if Perception.shared.handFresh, Perception.shared.handX != nil, free {
+            if state != .followHand { transition(to: .followHand) }
+        } else {
+            handFollowArmed = false
+            if state == .followHand { bird.position.y = feetY; transition(to: .idle) }
+        }
     }
 
     /// HomeController 通知平台变化(画/删/清空):更新本地缓存。
@@ -795,6 +841,25 @@ final class PetController: NSObject {
             self.bird.setViewDirection(.front)
             self.bird.startIdleAnimations()
         }
+    }
+
+    /// 主人手向上一挥 → 真的朝上飞一段:用重力模型给一个向上的初速度,
+    /// 抛物线冲上去再自然落回(鸟飞不出屏幕,上冲再回落正是自然的"飞一个")。
+    /// 与原地扑腾不同——这是窗口在空间里真的上移,方向对应手势方向。
+    func flyUpward() {
+        switch state {
+        case .idle, .perch, .walk, .approach, .retreat, .followHand: break
+        default: return   // 下落/拖拽/进窝等过程中不打断
+        }
+        supportSurface = nil          // 离开栖息面,交给重力
+        perchCompletion = nil
+        handFollowArmed = false
+        fallFromDrag = false
+        gracefulFlight = true         // 落地走轻盈分支,不翻滚
+        bird.setViewDirection(.front)
+        bird.flapWings(times: 12, fast: true)
+        vel = CGVector(dx: CGFloat.random(in: -60...60), dy: 1050)   // 向上冲,峰高≈230pt
+        transition(to: .falling)
     }
 
     /// 原地飞:扑腾翅膀小幅升空再落回(不去栖息窗口)。

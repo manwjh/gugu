@@ -200,10 +200,11 @@ final class GuguApp: NSObject, NSApplicationDelegate {
             self.console.refreshMenu()
         }
 
-        // vision (opt-in): presence + smile → events the bird can react to
+        // vision (opt-in): presence + smile → events the bird can react to.
+        // 注:连续感知(在座/表情/手型/手位/物品)统一走 onFrame → Perception;
+        // 下面这些回调只负责"反射动作 + 事件流",不再各自喂 Perception(消除碎片化)。
         visionSensor.onPresence = { [weak self] present in
             guard let self else { return }
-            Perception.shared.setOwnerVisible(present)
             if present {
                 self.affect.ownerReturned()
                 if self.pet.isSleeping && !self.affect.isSleepyTime { self.pet.wake() }
@@ -214,7 +215,6 @@ final class GuguApp: NSObject, NSApplicationDelegate {
         }
         visionSensor.onSmile = { [weak self] in
             guard let self else { return }
-            Perception.shared.sawExpression("smile")
             self.affect.petted()  // a smile warms the bird like a pat
             self.pet.bird.showBlush(true)
             self.pet.bird.showManpu(.love)
@@ -222,7 +222,6 @@ final class GuguApp: NSObject, NSApplicationDelegate {
             EventBus.shared.post(kind: "see_smile", summary: L.eventSeeSmile, weight: 18)
         }
         visionSensor.onExpression = { expression in
-            Perception.shared.sawExpression(expression.rawValue)
             switch expression {
             case .smile:
                 break // onSmile keeps the legacy smile behavior.
@@ -234,7 +233,6 @@ final class GuguApp: NSObject, NSApplicationDelegate {
         }
         visionSensor.onGesture = { [weak self] gesture in
             guard let self else { return }
-            Perception.shared.sawGesture(gesture.rawValue)
             switch gesture {
             case .wave:
                 self.pet.bird.flapWings(times: 4)
@@ -246,17 +244,11 @@ final class GuguApp: NSObject, NSApplicationDelegate {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in self?.pet.bird.tiltHead(false) }
             case .pointing:
                 self.pet.bird.peckOnce()
-            case .pointLeft:
-                self.pet.nudge(towardRight: false)
-                self.pet.bird.showManpu(.surprise)
-            case .pointRight:
-                self.pet.nudge(towardRight: true)
+            case .flyUp:
+                self.pet.flyUpward()              // 手向上挥 → 真的朝上飞一段(方向对应手势)
                 self.pet.bird.showManpu(.surprise)
             }
-            // 指挥手势是连续控制,别刷事件流;其它手势照旧记一笔给脑子。
-            if gesture != .pointLeft, gesture != .pointRight {
-                EventBus.shared.post(kind: gesture.eventKind, summary: gesture.summary, weight: 16)
-            }
+            EventBus.shared.post(kind: gesture.eventKind, summary: gesture.summary, weight: 16)
         }
         // 物品:不再逐个常驻上报(背景里的笔记本/键盘会刷屏、稀释主人模型)。
         // 改由下面 onVideoEvent 的"新出现/移动/消失"(新颖度)触发,只在变化时反应。
@@ -276,7 +268,6 @@ final class GuguApp: NSObject, NSApplicationDelegate {
             case .objectAppeared:
                 // 按"有意思程度"分级反应:动物→吃一惊、食物/杯子→啄、其它新东西→好奇。
                 let l = label ?? ""
-                Perception.shared.sawObject(l)
                 if ["猫", "狗", "鸟"].contains(l) {
                     self.pet.bird.showManpu(.surprise)
                     self.pet.bird.tiltHead(true)
@@ -303,11 +294,13 @@ final class GuguApp: NSObject, NSApplicationDelegate {
             }
             EventBus.shared.post(kind: event.eventKind, summary: event.summary(label: label), weight: weight)
         }
-        visionSensor.onDebug = { [weak self] d in
-            self?.visionDebug.update(d)
-            // 每帧的连续感知喂进上下文:在座 + 手的水平位置(镜像到主人视角:0左1右)。
-            Perception.shared.setOwnerVisible(d.facePresent)
-            Perception.shared.sawHand(x: d.handBox.map { 1 - $0.midX })
+        // 每帧连续快照:视觉感知的唯一入口。喂 Perception(语义已平滑)+ 调试窗口。
+        visionSensor.onFrame = { [weak self] f in
+            guard let self else { return }
+            Perception.shared.updateVision(present: f.ownerPresent, expression: f.expression,
+                                           gesture: f.gesture, handX: f.handX,
+                                           objectsNow: f.objectsNow)
+            self.visionDebug.update(f)
         }
     }
 

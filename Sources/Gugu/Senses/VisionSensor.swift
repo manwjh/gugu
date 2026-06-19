@@ -20,6 +20,7 @@ enum VisionExpression: String {
 
 enum VisionGesture: String {
     case wave, openPalm, thumbsUp, ok, pointing
+    case flyUp   // 手向上一挥:让咕咕飞一个
 
     var eventKind: String { "gesture_\(rawValue)" }
 
@@ -30,6 +31,7 @@ enum VisionGesture: String {
         case .thumbsUp: return "你看见主人竖起了大拇指"
         case .ok: return "你看见主人比了一个 OK 手势"
         case .pointing: return "你看见主人伸出手指指了指"
+        case .flyUp: return "你看见主人把手往上一挥,像是让你飞起来"
         }
     }
 }
@@ -120,17 +122,27 @@ enum VisionStartOutcome {
     case failed      // 会话配置失败
 }
 
-/// 每帧的视觉原始数值快照,喂给调试窗口实时显示,避免"盲调"阈值。
-struct VisionDebug {
-    var facePresent = false
+/// 每帧的视觉快照——视觉感知的**唯一连续真相源**。
+/// 既喂感知上下文(Perception 的视觉字段全部出自这里,语义已平滑),
+/// 也喂调试窗口(下半部分的原始数值/外框,用于调阈值)。
+struct VisionFrame {
+    // —— 语义层(已平滑,给 Perception 连续读)——
+    var ownerPresent = false              // 经迟滞平滑的"主人在不在"
+    var expression: String?               // 当前表情(连续 3 帧确认;无=中性)
+    var gesture: String?                  // 当前保持的手型(2 帧确认;无=没摆手型)
+    var handX: CGFloat?                    // 手水平位置 0=左 1=右(主人视角,已镜像)
+    var objectsNow: [String] = []         // 当前稳定在场的具体物品(中文名;已去抖,非每帧原始)
+
+    // —— 调试层(原始数值,给调试窗口调阈值)——
+    var facePresent = false               // 本帧原始是否检到脸(画外框用)
     var mouthWH: CGFloat = 0
     var cornerUpturn: CGFloat = 0
     var eyeL: CGFloat = 0
     var eyeR: CGFloat = 0
     var expressions: [String] = []        // 本帧检测到(去抖前)
-    var gesture: String = "—"             // 本帧原始手型
+    var rawGesture: String = "—"          // 本帧原始手型
     var fingers: [Bool] = []              // 食/中/无名/小
-    var palmSamples = 0                   // 挥手轨迹缓冲帧数
+    var palmSamples = 0                   // 手轨迹缓冲帧数
     var objects: [(label: String, conf: Float)] = []
     var lowPower = false
     var modelLoaded = false
@@ -159,7 +171,7 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
     private var lastPresenceChange = Date.distantPast
     private var gestureCandidate: VisionGesture?
     private var gestureCandidateCount = 0
-    private var palmXHistory: [(t: Date, x: CGFloat)] = []   // 张掌时手心 x 轨迹,用于判挥手(来回摆)
+    private var handHistory: [(t: Date, p: CGPoint)] = []   // 手中心轨迹:x 来回=挥手,y 上冲=让飞
     private var expressionStreak: [VisionExpression: Int] = [:]  // 表情连续命中帧数(去抖,防打哈欠误判为笑)
     private var faceMissingStreak = 0                          // 连续看不到脸的帧数(离开需连续多帧,防闪烁)
     private var lastObjectLabels: [String: Int] = [:]
@@ -172,7 +184,7 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
     var onGesture: ((VisionGesture) -> Void)?
     var onObject: ((VisionObjectObservation) -> Void)?
     var onVideoEvent: ((VideoUnderstandingEvent, String?) -> Void)?
-    var onDebug: ((VisionDebug) -> Void)?   // 每帧原始数值 → 调试窗口
+    var onFrame: ((VisionFrame) -> Void)?   // 每帧连续快照 → Perception + 调试窗口
 
     var objectRecognitionAvailable: Bool {
         objectRecognizer.available
@@ -419,10 +431,12 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
             onExpression?(expression)
         }
 
-        if let gesture = stableGesture(from: hand, now: now),
-           now.timeIntervalSince(lastGesture[gesture] ?? .distantPast) > 12 {
-            lastGesture[gesture] = now
-            onGesture?(gesture)
+        if let gesture = stableGesture(from: hand, now: now) {
+            let cooldown: TimeInterval = (gesture == .flyUp) ? 2.5 : 12   // "让飞"可较快重复
+            if now.timeIntervalSince(lastGesture[gesture] ?? .distantPast) > cooldown {
+                lastGesture[gesture] = now
+                onGesture?(gesture)
+            }
         }
 
         for object in stableObjects(from: objects, now: now) {
@@ -432,24 +446,32 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
             onVideoEvent?(event.kind, event.label)
         }
 
-        if let onDebug {
-            var dbg = VisionDebug()
-            dbg.facePresent = face.present
-            dbg.mouthWH = face.mouthWH
-            dbg.cornerUpturn = face.cornerUpturn
-            dbg.eyeL = face.eyeL
-            dbg.eyeR = face.eyeR
-            dbg.expressions = face.expressions.map(\.rawValue)
-            dbg.gesture = hand.gesture?.rawValue ?? "—"
-            dbg.fingers = hand.fingers
-            dbg.palmSamples = palmXHistory.count
-            dbg.objects = rawObjects.map { ($0.label, $0.conf) }
-            dbg.lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
-            dbg.modelLoaded = objectRecognizer.modelLoaded
-            dbg.faceBox = face.present ? face.box : nil
-            dbg.handBox = hand.box
-            dbg.objectBoxes = rawObjects
-            onDebug(dbg)
+        if let onFrame {
+            var f = VisionFrame()
+            // —— 语义层(平滑后的当前状态)——
+            f.ownerPresent = facePresent                       // 迟滞平滑后的"在不在"
+            f.expression = [VisionExpression.smile, .surprised, .sleepy]
+                .last { expressionStreak[$0, default: 0] >= 3 }?.rawValue
+            f.gesture = gestureCandidateCount >= 2 ? gestureCandidate?.rawValue : nil
+            f.handX = hand.box.map { 1 - $0.midX }             // 镜像成主人视角,收口在此
+            f.objectsNow = videoTracker.presentObjectLabels()  // 稳定在场集(已去抖),非每帧原始
+            // —— 调试层(原始数值)——
+            f.facePresent = face.present
+            f.mouthWH = face.mouthWH
+            f.cornerUpturn = face.cornerUpturn
+            f.eyeL = face.eyeL
+            f.eyeR = face.eyeR
+            f.expressions = face.expressions.map(\.rawValue)
+            f.rawGesture = hand.gesture?.rawValue ?? "—"
+            f.fingers = hand.fingers
+            f.palmSamples = handHistory.count
+            f.objects = rawObjects.map { ($0.label, $0.conf) }
+            f.lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
+            f.modelLoaded = objectRecognizer.modelLoaded
+            f.faceBox = face.present ? face.box : nil
+            f.handBox = hand.box
+            f.objectBoxes = rawObjects
+            onFrame(f)
         }
     }
 
@@ -459,27 +481,35 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         lastPresenceChange = .distantPast
         gestureCandidate = nil
         gestureCandidateCount = 0
-        palmXHistory.removeAll()
+        handHistory.removeAll()
         expressionStreak.removeAll()
         lastObjectLabels.removeAll()
         videoTracker.reset()
     }
 
     private func stableGesture(from hand: HandSignals, now: Date) -> VisionGesture? {
-        // 挥手:只要手可见就记手心 x 轨迹(与具体手型无关——挥手时手型会抖),
-        // 检测来回摆动;否则手不见了才清空轨迹。
+        // 手中心轨迹(与手型无关):x 来回摆=挥手;y 单向上冲="让你飞"。
+        // 关键:快挥时手会运动模糊、单帧漏检——绝不能一漏就清空轨迹,否则永远攒不满。
         if let center = hand.center {
-            palmXHistory.append((now, center.x))
-            palmXHistory.removeAll { now.timeIntervalSince($0.t) > 1.5 }
-            if VisionSensor.isWaving(palmXHistory) {
-                palmXHistory.removeAll()
-                gestureCandidate = nil
-                gestureCandidateCount = 0
+            // 只有断档过久(>0.5s)才另起一段,避免把"手离开再回来"拼成假反转;
+            // 短暂漏检(快挥的常态)继续累积,trim 负责老化旧样本。
+            if let last = handHistory.last, now.timeIntervalSince(last.t) > 0.5 {
+                handHistory.removeAll()
+            }
+            handHistory.append((now, center))
+            handHistory.removeAll { now.timeIntervalSince($0.t) > 1.2 }
+            if VisionSensor.isWaving(handHistory) {
+                handHistory.removeAll()
+                gestureCandidate = nil; gestureCandidateCount = 0
                 return .wave
             }
-        } else {
-            palmXHistory.removeAll()
+            if VisionSensor.isSwipeUp(handHistory) {
+                handHistory.removeAll()
+                gestureCandidate = nil; gestureCandidateCount = 0
+                return .flyUp
+            }
         }
+        // 注:不在"看不到手"时清空 handHistory——漏检的那几帧靠 1.2s trim 自然老化。
 
         guard let gesture = hand.gesture else {
             gestureCandidate = nil
@@ -497,9 +527,9 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
     }
 
     /// 手心 x 轨迹是否构成"挥手":来回摆动至少 2 次,且横向幅度够大。
-    nonisolated private static func isWaving(_ history: [(t: Date, x: CGFloat)]) -> Bool {
+    nonisolated private static func isWaving(_ history: [(t: Date, p: CGPoint)]) -> Bool {
         guard history.count >= 4 else { return false }
-        let xs = history.map(\.x)
+        let xs = history.map(\.p.x)
         guard let mn = xs.min(), let mx = xs.max(), mx - mn > 0.10 else { return false }
         var reversals = 0
         var lastSign = 0
@@ -511,6 +541,16 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
             lastSign = s
         }
         return reversals >= 2
+    }
+
+    /// 手心 y 轨迹是否构成"上挥"(Vision 直立坐标 y 向上):净上移够大、且基本单向向上(不是上下抖)。
+    nonisolated private static func isSwipeUp(_ history: [(t: Date, p: CGPoint)]) -> Bool {
+        guard history.count >= 4, let first = history.first, let last = history.last else { return false }
+        let net = last.p.y - first.p.y           // >0 = 向上
+        guard net > 0.20 else { return false }
+        var travel: CGFloat = 0
+        for i in 1..<history.count { travel += abs(history[i].p.y - history[i - 1].p.y) }
+        return travel > 0 && net / travel > 0.6  // 基本单向向上(上下抖会相互抵消)
     }
 
     private func stableObjects(from objects: [VisionObjectObservation], now: Date) -> [VisionObjectObservation] {
@@ -919,6 +959,13 @@ private final class VideoUnderstandingTracker {
         }
         events += objectMotionEvents(objects: objects, now: now)
         return events
+    }
+
+    /// 当前稳定在场的物品(中文名)——已过去抖/置信门控的状态,供 Perception 连续读。
+    /// 与 objectAppeared 事件同源,只是这里给"此刻在场",那里给"刚出现"。
+    func presentObjectLabels() -> [String] {
+        lastObjectPresence.filter { $0.value }.keys
+            .map { VisionObjectObservation.localizedLabel($0) }.sorted()
     }
 
     private func faceMotionEvents(now: Date) -> [Event] {

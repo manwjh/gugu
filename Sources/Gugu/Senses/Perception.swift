@@ -13,14 +13,18 @@ import AppKit
 final class Perception {
     static let shared = Perception()
 
-    // MARK: 视觉
-    private(set) var ownerVisible = false
-    private var faceExpr: (v: String, t: Date)?       // 笑/惊讶/困
+    // MARK: 视觉(全部出自 VisionSensor 每帧连续快照 VisionFrame,语义已平滑)
+    private var _ownerVisible = false
+    private var lastVisionFrame = Date.distantPast
+    private var faceExpr: (v: String, t: Date)?       // 笑/惊讶/困(中性时清空)
     private var gesture: (v: String, t: Date)?
     private var objects: [String: Date] = [:]         // 物品中文名 -> 最近看见时间
     /// 手的水平位置(0=左 1=右,**主人视角**,已镜像);供"跟随手"等共享坐标交互用。
     private(set) var handX: CGFloat?
     private var handSeen = Date.distantPast
+    /// 摄像头关闭/无帧时视觉即视为"无"——避免拿陈旧的"看得见主人"骗脑子。
+    private var visionFresh: Bool { Date().timeIntervalSince(lastVisionFrame) < 1.5 }
+    var ownerVisible: Bool { _ownerVisible && visionFresh }
 
     // MARK: 语音 / 文字
     private(set) var listening = false
@@ -38,13 +42,22 @@ final class Perception {
     private(set) var energy = 0.7
     private(set) var valence = 0.0
 
-    // MARK: - 感官推送(事件型)
+    // MARK: - 感官推送
 
-    func setOwnerVisible(_ v: Bool) { ownerVisible = v }
-    func sawExpression(_ e: String) { faceExpr = (e, Date()) }
-    func sawGesture(_ g: String) { gesture = (g, Date()) }
-    func sawObject(_ label: String) { objects[label] = Date() }
-    func sawHand(x: CGFloat?) { handX = x; handSeen = Date() }
+    /// 视觉:每帧一次的连续快照(VisionSensor.onFrame)。视觉字段的**唯一入口**——
+    /// 不再由零散的去抖事件回调喂养,保证"此刻看见什么"前后一致、随相机开关进退。
+    func updateVision(present: Bool, expression: String?, gesture: String?,
+                      handX: CGFloat?, objectsNow: [String]) {
+        let now = Date()
+        lastVisionFrame = now
+        _ownerVisible = present
+        faceExpr = expression.map { ($0, now) }            // nil=中性,立即清空,不留陈旧情绪
+        if let g = gesture { self.gesture = (g, now) }      // 保持的手型;松手后靠 freshGesture 自然过期
+        self.handX = handX
+        if handX != nil { handSeen = now }
+        for o in objectsNow { objects[o] = now }            // 稳定在场集刷新;移走后靠时间衰减
+    }
+
     func heardOrTyped(_ text: String, via: String) {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return }

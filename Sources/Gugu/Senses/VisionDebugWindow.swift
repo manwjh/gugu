@@ -19,7 +19,7 @@ final class VisionDebugWindow {
     private let renderInterval: TimeInterval = 0.33
     private let aggWindow: TimeInterval = 1.5
     private var lastTextRender = Date.distantPast
-    private var latest = VisionDebug()
+    private var latest = VisionFrame()
     private var exprHistory: [(t: Date, exprs: [String])] = []
     private var objSeen: [String: (peak: Float, last: Date)] = [:]
 
@@ -82,7 +82,7 @@ final class VisionDebugWindow {
         isOpen = false
     }
 
-    func update(_ d: VisionDebug) {
+    func update(_ d: VisionFrame) {
         guard isOpen else { return }
         let now = Date()
         latest = d
@@ -91,7 +91,7 @@ final class VisionDebugWindow {
         var boxes: [PreviewBoxView.Box] = []
         if let fb = d.faceBox { boxes.append(.init(rect: fb, label: "脸", color: .systemGreen)) }
         if let hb = d.handBox {
-            boxes.append(.init(rect: hb, label: d.gesture == "—" ? "手" : d.gesture, color: .systemOrange))
+            boxes.append(.init(rect: hb, label: d.rawGesture == "—" ? "手" : d.rawGesture, color: .systemOrange))
         }
         for o in d.objectBoxes {
             guard let name = VisionObjectObservation.concreteLabel(o.label) else { continue }
