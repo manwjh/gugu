@@ -132,8 +132,8 @@ func runOfflineSelfTest() {
         let config = Config.load()
         check("config", config.apiURL.contains("http") && config.petName == "咕咕",
               "url=\(config.apiURL) key=\(config.apiKey.isEmpty ? "(未配置)" : "(已配置)")")
-        check("config.tools", !config.toolLocalNotifications && !config.dreamUseBatch,
-              "notifications=\(config.toolLocalNotifications) dream_batch=\(config.dreamUseBatch)")
+        check("config.tools", !config.toolLocalNotifications,
+              "notifications=\(config.toolLocalNotifications)")
         let infoPlist = (try? String(contentsOf: URL(fileURLWithPath: "Info.plist"), encoding: .utf8)) ?? ""
         check("permissions.plist",
               infoPlist.contains("NSCameraUsageDescription")
@@ -243,21 +243,6 @@ func runOfflineSelfTest() {
               VisionDebugSelfTest.frameGateRejectsOldGenerations(),
               "camera callbacks from old sessions are ignored")
 
-        let batchState = DreamBatchState(
-            batchID: "batch_offline",
-            customID: "dream_offline",
-            memoryDay: "2026-01-02",
-            status: "in_progress",
-            createdAt: Date(),
-            resultURL: nil
-        )
-        DreamBatchStore.save(batchState)
-        let loadedBatch = DreamBatchStore.load()
-        check("dream.batch_store",
-              loadedBatch?.batchID == "batch_offline" && loadedBatch?.memoryDay == "2026-01-02",
-              loadedBatch?.status ?? "(nil)")
-        DreamBatchStore.clear()
-
         do {
             let text = """
             模型有时候会多说两句。
@@ -359,25 +344,6 @@ func runOfflineSelfTest() {
         let deferredReply = localBrain.handleLocalCommand("咕咕,今晚提醒我看离线任务队列")
         check("brain.local_deferred", deferredReply?.reply.contains("夜里") == true,
               deferredReply?.reply ?? "(nil)")
-        do {
-            let batchDream = try localBrain.applyDreamBatchText("""
-            {"owner":"主人在补 Batch 骨架","projects":"Gugu 离线梦境测试","self":"我会做梦了","new_skill_name":"","new_skill_body":"","morning_words":"我把梦收好了"}
-            """)
-            check("dream.batch_apply", batchDream.morningWords == "我把梦收好了",
-                  batchDream.evolutionSummary)
-        } catch {
-            check("dream.batch_apply", false, "\(error)")
-        }
-        do {
-            let batchLine = """
-            {"custom_id":"dream_offline","result":{"type":"succeeded","message":{"content":[{"type":"text","text":"{\\"owner\\":\\"主人在审查完成度\\",\\"projects\\":\\"补 Batch 闭环\\",\\"self\\":\\"我会等结果再做梦\\",\\"new_skill_name\\":\\"\\",\\"new_skill_body\\":\\"\\",\\"morning_words\\":\\"梦境结果回来了\\"}"}]}}}
-            """
-            let dreamText = try Brain.extractDreamTextFromBatchResults(batchLine, customID: "dream_offline")
-            check("dream.batch_jsonl", dreamText.contains("梦境结果回来了"),
-                  dreamText)
-        } catch {
-            check("dream.batch_jsonl", false, "\(error)")
-        }
 
         let memory = Memory()
         do {
@@ -443,7 +409,7 @@ func runOfflineSelfTest() {
             try memory.appendNoteRequired("今天的记忆保留", date: Date())
             let beforeSnapshots = (try? FileManager.default.contentsOfDirectory(at: Paths.snapshots, includingPropertiesForKeys: nil)
                 .filter { $0.lastPathComponent.hasPrefix("memory-owner.md.") }.count) ?? 0
-            let applied = try localBrain.applyDreamBatchText("""
+            let applied = try localBrain.applyDreamText("""
             {"owner":"主人昨天在检查记忆持久化","projects":"补齐梦境可靠性","self":"我会先备份再改记忆","new_skill_name":"深夜记忆备份","new_skill_body":"做梦前先留快照,失败就不清笔记。","morning_words":"昨晚的梦收好了"}
             """, for: fixedDreamDate)
             let afterSnapshots = (try? FileManager.default.contentsOfDirectory(at: Paths.snapshots, includingPropertiesForKeys: nil)
@@ -974,11 +940,6 @@ func runOfflineSelfTest() {
                   hint.contains("mood") && hint.contains("action")
                     && hint.contains("开心") && hint.contains("(必填)"),
                   "hint=\(hint.prefix(60))…")
-
-            // provider selection is config-driven; default is now openai
-            // (taas.hk honors structured output on the chat-completions line).
-            check("openai.provider_default", Config.load().apiProvider == "openai",
-                  "provider=\(Config.load().apiProvider)")
         }
 
         // LLM wire: typed request/response contract — pure parsing, no network.
@@ -1011,22 +972,11 @@ func runOfflineSelfTest() {
             let oEmpty = parse(#"{"choices":[{"message":{"content":""},"finish_reason":"stop"}]}"#, OpenAIResponse.reply)
             check("wire.openai_empty", isEmpty(oEmpty), "\(oEmpty)")
 
-            let aMulti = parse(#"{"content":[{"type":"text","text":"甲"},{"type":"text","text":"乙"}],"stop_reason":"end_turn"}"#, AnthropicResponse.reply)
-            check("wire.anthropic_multiblock", (try? aMulti.get()) == "甲乙", "\(aMulti)")
-
-            let aEmpty = parse(#"{"content":[],"stop_reason":"end_turn"}"#, AnthropicResponse.reply)
-            check("wire.anthropic_empty", isEmpty(aEmpty), "\(aEmpty)")
-
             let guarded = OpenAIJSONGuard.ensureJSONMentioned("请只回复一个对象")
             let preserved = OpenAIJSONGuard.ensureJSONMentioned("output JSON now")
             check("wire.json_guard",
                   guarded.range(of: "json", options: .caseInsensitive) != nil && preserved == "output JSON now",
                   "guarded_has_json + preserved=\(preserved == "output JSON now")")
-
-            let encoded = (try? JSONEncoder().encode(JSONValue(Brain.heartbeatSchema)))
-                .flatMap { String(data: $0, encoding: .utf8) } ?? ""
-            check("wire.schema_jsonvalue", encoded.contains("mood") && encoded.contains("properties"),
-                  "encoded_len=\(encoded.count)")
         }
 
         print(failures == 0 ? "=== 全部通过 ===" : "=== \(failures) 项失败 ===")

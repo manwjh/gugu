@@ -37,25 +37,9 @@ final class Brain {
         personaText + "\n\n" + L.llmLanguageDirective
     }
 
-    /// Single-call transport, chosen by `api.provider`. Default is Anthropic.
-    private var client: LLMClient {
-        config.apiProvider == "openai"
-            ? OpenAIClient(baseURL: config.apiURL, apiKey: config.apiKey)
-            : AnthropicClient(baseURL: config.apiURL, apiKey: config.apiKey)
-    }
-
-    /// Whether the current provider supports the batch dream transport.
-    /// Batch is Anthropic-only; openai mode must fall back to synchronous dreaming.
-    var batchSupported: Bool { config.apiProvider != "openai" }
-
-    /// Batch transport — Anthropic-only. OpenAI mode has no batch path, so the
-    /// dream layer must run synchronously there (Scheduler already branches on
-    /// `dreamUseBatch`; this guard is a defensive backstop).
-    private func batchClient() throws -> AnthropicClient {
-        guard config.apiProvider != "openai" else {
-            throw LLMError.malformed("batch unsupported in openai provider mode")
-        }
-        return AnthropicClient(baseURL: config.apiURL, apiKey: config.apiKey)
+    /// The single LLM transport: OpenAI-compatible Chat Completions (taas.hk).
+    private var client: OpenAIClient {
+        OpenAIClient(baseURL: config.apiURL, apiKey: config.apiKey)
     }
 
     // MARK: - L2 Heartbeat
@@ -541,116 +525,17 @@ final class Brain {
         )
         budget.record(inputChars: systemPrompt.count + user.count,
                       outputChars: reply.text.count, label: "dream")
-
-        guard let data = Brain.extractJSON(reply.text)?.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw LLMError.malformed("dream json: \(reply.text)")
-        }
-
-        return try applyDreamObject(obj, for: date)
+        return try applyDreamText(reply.text, for: date)
     }
 
-    func submitDreamBatch(for date: Date = Date()) async throws -> DreamBatchState {
-        let customID = "dream-\(Memory.dayString(for: date))-\(ISO8601DateFormatter().string(from: Date()))"
-        let user = dreamPrompt(for: date)
-        let batch = try await batchClient().createMessageBatch(
-            customID: customID,
-            model: config.modelId,
-            maxTokens: 1500,
-            system: systemPrompt,
-            messages: [["role": "user", "content": user]],
-            schema: Brain.dreamSchema
-        )
-        budget.record(inputChars: systemPrompt.count + user.count, outputChars: 1, label: "dream")
-        let state = DreamBatchState(
-            batchID: batch.id,
-            customID: customID,
-            memoryDay: Memory.dayString(for: date),
-            status: batch.processingStatus,
-            createdAt: Date(),
-            resultURL: batch.resultURL
-        )
-        DreamBatchStore.save(state)
-        Audit.record(kind: "dream.batch", summary: "已提交梦境 Batch",
-                     detail: ["batch_id": batch.id, "status": batch.processingStatus])
-        return state
-    }
-
-    func refreshDreamBatchStatus() async throws -> DreamBatchState? {
-        guard var state = DreamBatchStore.load() else { return nil }
-        let batch = try await batchClient().retrieveMessageBatch(id: state.batchID)
-        state.status = batch.processingStatus
-        state.resultURL = batch.resultURL
-        DreamBatchStore.save(state)
-        Audit.record(kind: "dream.batch", summary: "梦境 Batch 状态:\(state.status)",
-                     detail: ["batch_id": state.batchID])
-        return state
-    }
-
-    func applyReadyDreamBatch(_ state: DreamBatchState) async throws -> DreamResult? {
-        guard Brain.isBatchCompleted(state.status), let resultURL = state.resultURL else {
-            return nil
-        }
-        let resultsText = try await batchClient().downloadBatchResults(from: resultURL)
-        let dreamText = try Brain.extractDreamTextFromBatchResults(resultsText, customID: state.customID)
-        return try applyDreamBatchText(dreamText, for: state.memoryDate)
-    }
-
-    func applyDreamBatchText(_ text: String, for date: Date = Date()) throws -> DreamResult {
+    /// Apply a dream from raw model JSON text (the path `dream()` uses after the
+    /// network call). Split out so the apply/persistence logic is offline-testable.
+    func applyDreamText(_ text: String, for date: Date = Date()) throws -> DreamResult {
         guard let data = Brain.extractJSON(text)?.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw LLMError.malformed("dream batch json: \(text)")
+            throw LLMError.malformed("dream json: \(text)")
         }
-        let result = try applyDreamObject(obj, for: date)
-        DreamBatchStore.clear()
-        Audit.record(kind: "dream.batch", summary: "已应用梦境 Batch 结果")
-        return result
-    }
-
-    static func isBatchCompleted(_ status: String) -> Bool {
-        ["ended", "completed", "succeeded", "done"].contains(status.lowercased())
-    }
-
-    static func extractDreamTextFromBatchResults(_ text: String, customID: String? = nil) throws -> String {
-        for rawLine in text.split(separator: "\n") {
-            let line = String(rawLine)
-            guard let data = line.data(using: .utf8),
-                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                continue
-            }
-            if let customID,
-               let lineCustomID = obj["custom_id"] as? String,
-               lineCustomID != customID {
-                continue
-            }
-            if let result = obj["result"] as? [String: Any] {
-                if let message = result["message"] as? [String: Any],
-                   let text = extractTextBlocks(from: message) {
-                    return text
-                }
-                if let text = extractTextBlocks(from: result) {
-                    return text
-                }
-                if let error = result["error"] as? [String: Any] {
-                    throw LLMError.malformed("batch request failed: \(error)")
-                }
-            }
-            if let text = extractTextBlocks(from: obj) {
-                return text
-            }
-        }
-        if let json = extractJSON(text) {
-            return json
-        }
-        throw LLMError.malformed("dream batch result jsonl: \(text)")
-    }
-
-    private static func extractTextBlocks(from obj: [String: Any]) -> String? {
-        guard let content = obj["content"] as? [[String: Any]] else { return nil }
-        let text = content.compactMap { block -> String? in
-            (block["type"] as? String) == "text" ? block["text"] as? String : nil
-        }.joined()
-        return text.isEmpty ? nil : text
+        return try applyDreamObject(obj, for: date)
     }
 
     private func applyDreamObject(_ obj: [String: Any], for date: Date) throws -> DreamResult {

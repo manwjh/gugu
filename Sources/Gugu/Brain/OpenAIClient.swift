@@ -9,7 +9,7 @@ import GuguKernel
 /// reject. Wire models live in `LLMWire.swift`; parsing is the testable
 /// `OpenAIResponse.reply(from:)`.
 @MainActor
-struct OpenAIClient: LLMClient {
+struct OpenAIClient {
     let baseURL: String
     let apiKey: String
 

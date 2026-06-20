@@ -12,8 +12,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private weak var app: GuguApp?
 
     // Basic fields
-    // Basic fields
-    private let providerPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let urlField = NSTextField()
     private let keyField = NSSecureTextField()
     private let modelField = NSTextField()
@@ -72,12 +70,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         ])
 
         // --- Basic rows ---
-        providerPopup.addItem(withTitle: L.settingsProviderAnthropic)   // tag/index 0
-        providerPopup.addItem(withTitle: L.settingsProviderOpenAI)      // tag/index 1
-        providerPopup.target = self
-        providerPopup.action = #selector(providerChanged)
-        rootStack.addArrangedSubview(controlRow(L.settingsProvider, providerPopup, width: 200))
-        rootStack.addArrangedSubview(formRow(L.settingsURL, urlField, placeholder: "https://api.anthropic.com"))
+        rootStack.addArrangedSubview(formRow(L.settingsURL, urlField, placeholder: "https://taas.hk"))
         rootStack.addArrangedSubview(formRow(L.settingsKey, keyField, placeholder: "sk-…"))
         rootStack.addArrangedSubview(formRow(L.settingsModel, modelField, placeholder: "deepseek-v4-flash"))
 
@@ -152,26 +145,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         return label
     }
 
-    /// Like `formRow` but for an arbitrary control (e.g. the provider popup),
-    /// keeping the same right-aligned label column.
-    private func controlRow(_ label: String, _ control: NSView, width: CGFloat) -> NSView {
-        let title = NSTextField(labelWithString: label)
-        title.alignment = .right
-        title.font = .systemFont(ofSize: 12)
-        title.textColor = .labelColor
-        title.translatesAutoresizingMaskIntoConstraints = false
-        title.widthAnchor.constraint(equalToConstant: 110).isActive = true
-
-        control.translatesAutoresizingMaskIntoConstraints = false
-        control.widthAnchor.constraint(equalToConstant: width).isActive = true
-
-        let row = NSStackView(views: [title, control])
-        row.orientation = .horizontal
-        row.alignment = .centerY
-        row.spacing = 8
-        return row
-    }
-
     // MARK: - Load / Save
 
     private func loadValues() {
@@ -182,8 +155,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         urlField.stringValue = yaml.str("api.url", "")
         keyField.stringValue = yaml.str("api.key", "")
         modelField.stringValue = yaml.str("model.id", "")
-        providerPopup.selectItem(at: yaml.str("api.provider", "anthropic") == "openai" ? 1 : 0)
-        updateURLPlaceholder()
 
         dailyTokens.stringValue = rawValues["budget.daily_tokens"] ?? ""
     }
@@ -208,22 +179,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         window?.close()
     }
 
-    /// Currently selected provider as a config value.
-    private var selectedProvider: String {
-        providerPopup.indexOfSelectedItem == 1 ? "openai" : "anthropic"
-    }
-
-    @objc private func providerChanged() {
-        updateURLPlaceholder()
-    }
-
-    /// Hint a sensible default endpoint for the chosen provider.
-    private func updateURLPlaceholder() {
-        urlField.placeholderString = selectedProvider == "openai"
-            ? "https://api.deepseek.com"
-            : "https://api.anthropic.com"
-    }
-
     @objc private func save() {
         var changes: [(key: String, value: String?)] = []
 
@@ -242,11 +197,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             if newVal != oldVal { changes.append((key, yamlEscape(newVal))) }
         }
 
-        // Provider comes from the popup, not a text field.
-        let provider = selectedProvider
-        if provider != (rawValues["api.provider"] ?? "anthropic") {
-            changes.append(("api.provider", provider))
-        }
         sync("api.url", urlField, deletable: false)
         sync("api.key", keyField, deletable: false)
         sync("model.id", modelField, deletable: false)

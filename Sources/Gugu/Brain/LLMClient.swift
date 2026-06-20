@@ -1,45 +1,8 @@
 import Foundation
 import GuguKernel
 
-/// Shared result/error types and the protocol both LLM transports implement.
-/// Two providers conform: `OpenAIClient` (Chat Completions — the factory default
-/// `api.provider: openai`, used by DeepSeek/Ollama/SiliconFlow-style endpoints)
-/// and `AnthropicClient` (Messages API + batch). Only the single-call `create`
-/// is shared; batch is Anthropic-only and lives on that concrete type.
-@MainActor
-protocol LLMClient: Sendable {
-    var baseURL: String { get }
-    var apiKey: String { get }
-
-    /// One model call. `system` is the persona/system prompt; `messages` are
-    /// Anthropic-style role/content dicts (the OpenAI client flattens them).
-    /// `schema`, when present, requests structured JSON output. `policy` sets the
-    /// per-request timeout + retry behavior (see `LLMCallPolicy`).
-    func create(
-        model: String,
-        maxTokens: Int,
-        system: String?,
-        messages: [[String: Any]],
-        schema: [String: Any]?,
-        policy: LLMCallPolicy
-    ) async throws -> LLMReply
-}
-
-extension LLMClient {
-    /// Convenience overload defaulting to the interactive `.chat` policy, so call
-    /// sites that don't care can omit it. (Protocol witnesses can't carry default
-    /// args, so the default lives here on a distinct, policy-less signature.)
-    func create(
-        model: String,
-        maxTokens: Int,
-        system: String?,
-        messages: [[String: Any]],
-        schema: [String: Any]? = nil
-    ) async throws -> LLMReply {
-        try await create(model: model, maxTokens: maxTokens, system: system,
-                         messages: messages, schema: schema, policy: .chat)
-    }
-}
+/// Shared result/error/transport types for the LLM layer. There is a single
+/// transport — `OpenAIClient` (Chat Completions; taas.hk / DeepSeek-style).
 
 /// Per-call timeout + retry behavior. The pet is interactive: a heartbeat must
 /// feel live, so it fails fast rather than retrying a slow/stalled call for

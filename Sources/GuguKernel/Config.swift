@@ -73,9 +73,6 @@ package struct MiniYAML {
 package struct Config {
     package var apiURL: String
     package var apiKey: String
-    /// Wire protocol: "anthropic" (default, Messages API) or "openai"
-    /// (Chat Completions, for OpenAI-compatible vendors).
-    package var apiProvider: String
 
     /// The single model used for everything (heartbeat / chat / dream). Per-call
     /// token caps live in code (the call sites), not config — keeping the model
@@ -97,8 +94,6 @@ package struct Config {
     /// 联网搜索权限。框架就绪但默认关、且当前只记录请求不真正出网(见 LocalToolExecutor)。
     package var toolWebSearch: Bool
 
-    package var dreamUseBatch: Bool
-
     package var petName: String
 
     /// UI language: "en" or "zh". Default "en".
@@ -110,7 +105,6 @@ package struct Config {
         return Config(
             apiURL: y.str("api.url", "https://taas.hk"),
             apiKey: y.str("api.key", ""),
-            apiProvider: y.str("api.provider", "openai"),
             modelId: y.str("model.id", "deepseek-v4-flash"),
             dailyTokens: y.int("budget.daily_tokens", 200_000),
             heartbeatMin: y.double("heartbeat.min_interval", 600),
@@ -123,7 +117,6 @@ package struct Config {
             toolReminders: y.bool("tools.reminders", false),
             toolLocalNotifications: y.bool("tools.local_notifications", false),
             toolWebSearch: y.bool("tools.web_search", false),
-            dreamUseBatch: y.bool("dream.use_batch", false),
             petName: y.str("pet.name", "咕咕"),
             language: y.str("pet.language", "en")
         )
@@ -142,7 +135,6 @@ package struct Config {
             api:
               url: \(apiURL)
               key: \(apiKey)
-              provider: openai   # openai(Chat Completions,默认)或 anthropic(Messages API)
 
             model:
               id: deepseek-v4-flash    # 唯一模型,心跳/对话/梦境共用;per-call token 上限在代码里
@@ -165,9 +157,6 @@ package struct Config {
               reminders: false         # 高阶能力,必须经 proposals 批准
               local_notifications: false # 系统通知,必须经 proposals 批准
               web_search: false        # 联网搜索(框架就绪;当前只记录请求,尚未真正出网)
-
-            dream:
-              use_batch: false         # 开启后夜间梦境走 /v1/messages/batches
             """
             try cfg.write(to: Paths.config, atomically: true, encoding: .utf8)
         }

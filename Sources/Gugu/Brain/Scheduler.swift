@@ -121,47 +121,19 @@ final class Scheduler {
         }
     }
 
-    private func maybeDream() {        guard let targetDate = dreamTargetDate(), !dreamInFlight else { return }
+    private func maybeDream() {
+        guard let targetDate = dreamTargetDate(), !dreamInFlight else { return }
         let memoryDay = Memory.dayString(for: targetDate)
         guard lastDreamDay != memoryDay else { return }
         dreamInFlight = true
-        let wantBatchButUnsupported = config.dreamUseBatch && !brain.batchSupported
         Task {
             defer { Task { @MainActor in self.dreamInFlight = false } }
             do {
-                if config.dreamUseBatch && brain.batchSupported {
-                    if DreamBatchStore.load() != nil {
-                        if let state = try await brain.refreshDreamBatchStatus(),
-                           let result = try await brain.applyReadyDreamBatch(state) {
-                            Log.info("dream", "Batch 梦境应用完成,阶段: \(result.evolutionSummary), 新技能: \(result.newSkill ?? "无"), 提案: \(result.proposalTitle ?? "无")")
-                            await runDueAutonomyTasks()
-                            pendingMorningWords = morningWords(from: result)
-                            markDreamDone(for: state.memoryDay)
-                        }
-                    } else {
-                        _ = try await brain.submitDreamBatch(for: targetDate)
-                    }
-                    return
-                }
-                if wantBatchButUnsupported {
-                    Log.info("dream", "已开启 batch 梦境,但当前 provider(\(config.apiProvider))不支持 batch 传输,已回退为同步梦境。")
-                    Audit.record(
-                        kind: "dream_degraded",
-                        summary: "Batch dream unsupported by provider; fell back to synchronous dreaming.",
-                        detail: ["reason": "batch unsupported for provider", "provider": config.apiProvider]
-                    )
-                }
                 let result = try await brain.dream(for: targetDate)
                 Log.info("dream", "梦境整理完成,阶段: \(result.evolutionSummary), 新技能: \(result.newSkill ?? "无"), 提案: \(result.proposalTitle ?? "无")")
                 await runDueAutonomyTasks()
                 // morning words delivered when owner returns (cached here)
-                var words = morningWords(from: result)
-                // One-time gentle heads-up when we were forced to fall back from batch.
-                if wantBatchButUnsupported && !dreamBatchFallbackNoticed {
-                    dreamBatchFallbackNoticed = true
-                    words += "\n(对了…我现在是用简单的方式整理梦境的,batch 模式这个大脑用不了。)"
-                }
-                pendingMorningWords = words
+                pendingMorningWords = morningWords(from: result)
                 markDreamDone(for: memoryDay)
             } catch {
                 Log.info("dream", "梦境失败: \(error)")
@@ -170,10 +142,6 @@ final class Scheduler {
     }
 
     private var pendingMorningWords: String? = nil
-
-    /// One-shot guard: only tell the owner once that batch dreaming fell back to
-    /// synchronous mode for this provider, so we don't repeat it every morning.
-    private var dreamBatchFallbackNoticed = false
 
     /// Run owner-approved deferred tasks for real (via the local tool layer),
     /// not the offline stub. Failures (e.g. permission off) are recorded by the

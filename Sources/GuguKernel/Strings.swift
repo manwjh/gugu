@@ -488,9 +488,6 @@ package enum L {
 
     package static var menuSettings: String { s("设置…", "Settings…") }
     package static var settingsTitle: String { s("咕咕设置", "Gugu Settings") }
-    package static var settingsProvider: String { s("协议", "Protocol") }
-    package static var settingsProviderAnthropic: String { s("Anthropic", "Anthropic") }
-    package static var settingsProviderOpenAI: String { s("OpenAI 兼容", "OpenAI-compatible") }
     package static var settingsURL: String { s("接口地址", "API URL") }
     package static var settingsKey: String { s("密钥", "API Key") }
     package static var settingsModel: String { s("模型", "Model") }
