@@ -40,6 +40,17 @@ struct OpenAIClient {
             chatMessages.append(.init(role: (m["role"] as? String) ?? "user",
                                       content: Self.flatten(m["content"])))
         }
+        // Reasoning models (deepseek-v4) often reason through the answer in
+        // `reasoning_content` and then emit EMPTY `content`. Repeat the output
+        // requirement at the very end — closest to generation — so the structured
+        // JSON actually lands in `content`. (Measured: cuts empty replies sharply.)
+        if schema != nil, let last = chatMessages.last {
+            chatMessages[chatMessages.count - 1] = .init(
+                role: last.role,
+                content: last.content
+                    + "\n\n现在直接输出一个完整的 JSON 对象作为回答(可以很短;不想说话就让 speech 为空字符串、用 action 回应)。"
+                    + "不要只在思考里作答,务必把 JSON 写进正式回复,绝不能返回空。")
+        }
 
         let request = OpenAIRequest(
             model: model,
