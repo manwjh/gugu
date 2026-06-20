@@ -236,14 +236,6 @@ final class GuguApp: NSObject, NSApplicationDelegate {
             switch gesture {
             case .wave:
                 self.pet.bird.flapWings(times: 4)
-            case .thumbsUp, .ok:
-                self.pet.bird.showBlush(true)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) { [weak self] in self?.pet.bird.showBlush(false) }
-            case .openPalm:
-                self.pet.bird.tiltHead(true)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in self?.pet.bird.tiltHead(false) }
-            case .pointing:
-                self.pet.bird.peckOnce()
             case .flyUp:
                 self.pet.flyUpward()              // 手向上挥 → 真的朝上飞一段(方向对应手势)
                 self.pet.bird.showManpu(.surprise)
@@ -298,8 +290,7 @@ final class GuguApp: NSObject, NSApplicationDelegate {
         visionSensor.onFrame = { [weak self] f in
             guard let self else { return }
             Perception.shared.updateVision(present: f.ownerPresent, expression: f.expression,
-                                           gesture: f.gesture, handX: f.handX,
-                                           objectsNow: f.objectsNow)
+                                           handX: f.handX, objectsNow: f.objectsNow)
             self.visionDebug.update(f)
         }
     }

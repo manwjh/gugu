@@ -336,7 +336,6 @@ final class PetController: NSObject {
             // 走向手的水平位置(共享坐标:handX 0=左 1=右,已是主人视角)。手离开就回 idle。
             let world = currentWorld
             guard Perception.shared.handFresh, let hx = Perception.shared.handX else {
-                handFollowArmed = false
                 bird.position.y = feetY
                 transition(to: .idle)
                 break
@@ -470,23 +469,15 @@ final class PetController: NSObject {
         transition(to: .falling)
     }
 
-    /// 跟随手:主人用食指指向(在画面里)→ 咕咕走向手的水平位置(共享坐标,天然不猜左右);
-    /// 手离开画面就停。读 Perception(统一感知上下文),每帧由 physicsTick 驱动。
-    private var handFollowArmed = false
-
+    /// 跟随手:只要画面里有手(handFresh + handX),咕咕就走向手的水平位置(共享坐标,
+    /// 天然不猜左右);手离开画面就停。统一的"手部运动跟随",不再依赖任何静态手型。
     private func updateHandFollow() {
         let free = (state == .idle || state == .walk || state == .followHand)
-        // 指向(食指)且手在画面里 → 武装跟随(只需一帧指向即可,之后靠手在不在维持)。
-        if free, Perception.shared.handFresh,
-           Perception.shared.freshGesture(within: 0.9) == VisionGesture.pointing.rawValue {
-            handFollowArmed = true
-        }
-        guard handFollowArmed else { return }
-        if Perception.shared.handFresh, Perception.shared.handX != nil, free {
+        if free, Perception.shared.handFresh, Perception.shared.handX != nil {
             if state != .followHand { transition(to: .followHand) }
-        } else {
-            handFollowArmed = false
-            if state == .followHand { bird.position.y = feetY; transition(to: .idle) }
+        } else if state == .followHand {
+            bird.position.y = feetY
+            transition(to: .idle)
         }
     }
 
@@ -808,7 +799,6 @@ final class PetController: NSObject {
         }
         supportSurface = nil          // 离开栖息面,交给重力
         perchCompletion = nil
-        handFollowArmed = false
         fallFromDrag = false
         gracefulFlight = true         // 落地走轻盈分支,不翻滚
         bird.setViewDirection(.front)

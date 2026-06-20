@@ -22,8 +22,6 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
     private var lastGesture: [VisionGesture: Date] = [:]
     private var lastObject: [String: Date] = [:]
     private var lastPresenceChange = Date.distantPast
-    private var gestureCandidate: VisionGesture?
-    private var gestureCandidateCount = 0
     private var handHistory: [(t: Date, p: CGPoint)] = []   // 手中心轨迹:x 来回=挥手,y 上冲=让飞
     private var expressionStreak: [VisionExpression: Int] = [:]  // 表情连续命中帧数(去抖,防打哈欠误判为笑)
     private var faceMissingStreak = 0                          // 连续看不到脸的帧数(离开需连续多帧,防闪烁)
@@ -305,7 +303,6 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
             f.ownerPresent = facePresent                       // 迟滞平滑后的"在不在"
             f.expression = [VisionExpression.smile, .surprised, .sleepy]
                 .last { expressionStreak[$0, default: 0] >= 3 }?.rawValue
-            f.gesture = gestureCandidateCount >= 2 ? gestureCandidate?.rawValue : nil
             f.handX = hand.box.map { 1 - $0.midX }             // 镜像成主人视角,收口在此
             f.objectsNow = videoTracker.presentObjectLabels()  // 稳定在场集(已去抖),非每帧原始
             // —— 调试层(原始数值)——
@@ -315,8 +312,8 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
             f.eyeL = face.eyeL
             f.eyeR = face.eyeR
             f.expressions = face.expressions.map(\.rawValue)
-            f.rawGesture = hand.gesture?.rawValue ?? "—"
-            f.fingers = hand.fingers
+            f.rawGesture = "—"          // 静态手型识别已移除;手势只剩 wave/flyUp(运动判定)
+            f.fingers = []
             f.palmSamples = handHistory.count
             f.objects = rawObjects.map { ($0.label, $0.conf) }
             f.lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
@@ -332,8 +329,6 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         facePresent = false
         faceMissingStreak = 0
         lastPresenceChange = .distantPast
-        gestureCandidate = nil
-        gestureCandidateCount = 0
         handHistory.removeAll()
         expressionStreak.removeAll()
         lastObjectLabels.removeAll()
@@ -343,40 +338,23 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
     private func stableGesture(from hand: HandSignals, now: Date) -> VisionGesture? {
         // 手中心轨迹(与手型无关):x 来回摆=挥手;y 单向上冲="让你飞"。
         // 关键:快挥时手会运动模糊、单帧漏检——绝不能一漏就清空轨迹,否则永远攒不满。
-        if let center = hand.center {
-            // 只有断档过久(>0.5s)才另起一段,避免把"手离开再回来"拼成假反转;
-            // 短暂漏检(快挥的常态)继续累积,trim 负责老化旧样本。
-            if let last = handHistory.last, now.timeIntervalSince(last.t) > 0.5 {
-                handHistory.removeAll()
-            }
-            handHistory.append((now, center))
-            handHistory.removeAll { now.timeIntervalSince($0.t) > 1.2 }
-            if VisionSensor.isWaving(handHistory) {
-                handHistory.removeAll()
-                gestureCandidate = nil; gestureCandidateCount = 0
-                return .wave
-            }
-            if VisionSensor.isSwipeUp(handHistory) {
-                handHistory.removeAll()
-                gestureCandidate = nil; gestureCandidateCount = 0
-                return .flyUp
-            }
+        guard let center = hand.center else { return nil }
+        // 只有断档过久(>0.5s)才另起一段,避免把"手离开再回来"拼成假反转;
+        // 短暂漏检(快挥的常态)继续累积,trim 负责老化旧样本。
+        if let last = handHistory.last, now.timeIntervalSince(last.t) > 0.5 {
+            handHistory.removeAll()
         }
-        // 注:不在"看不到手"时清空 handHistory——漏检的那几帧靠 1.2s trim 自然老化。
-
-        guard let gesture = hand.gesture else {
-            gestureCandidate = nil
-            gestureCandidateCount = 0
-            return nil
+        handHistory.append((now, center))
+        handHistory.removeAll { now.timeIntervalSince($0.t) > 1.2 }
+        if VisionSensor.isWaving(handHistory) {
+            handHistory.removeAll()
+            return .wave
         }
-
-        if gestureCandidate == gesture {
-            gestureCandidateCount += 1
-        } else {
-            gestureCandidate = gesture
-            gestureCandidateCount = 1
+        if VisionSensor.isSwipeUp(handHistory) {
+            handHistory.removeAll()
+            return .flyUp
         }
-        return gestureCandidateCount >= 2 ? gesture : nil   // 2 帧确认
+        return nil
     }
 
     /// 手心 x 轨迹是否构成"挥手":来回摆动至少 2 次,且横向幅度够大。
@@ -438,10 +416,8 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
     }
 
     nonisolated struct HandSignals {
-        var gesture: VisionGesture?
         var center: CGPoint?
         var area: CGFloat?
-        var fingers: [Bool] = []      // 调试用:食/中/无名/小 是否伸直
         var box: CGRect?              // 可视化:手归一化外框
     }
 
@@ -512,8 +488,7 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
             guard let recognized = points[name], recognized.confidence >= minConfidence else { return nil }
             return recognized.location
         }
-        guard let wrist = point(.wrist),
-              let indexTip = point(.indexTip),
+        guard let indexTip = point(.indexTip),
               let middleTip = point(.middleTip),
               let ringTip = point(.ringTip),
               let littleTip = point(.littleTip) else {
@@ -526,43 +501,9 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         let allPoints = points.values.filter { $0.confidence >= minConfidence }.map(\.location)
         let handArea = boundingArea(allPoints)
         let handBox = boundingBox(allPoints)
-        let palmSpan = max(0.05, hypot(indexTip.x - littleTip.x, indexTip.y - littleTip.y))
-        // 手指是否伸直:指尖比第二关节(PIP)离手腕更远 → 直;比掌跨参照更稳,握拳时不误判。
-        // PIP 缺失时回退到旧的掌跨比值法。
-        func extended(_ tip: CGPoint,
-                      _ pipName: VNHumanHandPoseObservation.JointName,
-                      fallback: CGFloat) -> Bool {
-            if let pip = point(pipName) {
-                return distance(tip, wrist) > distance(pip, wrist) * 1.08
-            }
-            return distance(tip, wrist) > palmSpan * fallback
-        }
-        let indexExtended = extended(indexTip, .indexPIP, fallback: 1.35)
-        let middleExtended = extended(middleTip, .middlePIP, fallback: 1.25)
-        let ringExtended = extended(ringTip, .ringPIP, fallback: 1.15)
-        let littleExtended = extended(littleTip, .littlePIP, fallback: 1.05)
-        let fingers = [indexExtended, middleExtended, ringExtended, littleExtended]
-
-        if let thumbTip = point(.thumbTip), distance(thumbTip, indexTip) < palmSpan * 0.42 {
-            return HandSignals(gesture: .ok, center: center, area: handArea, fingers: fingers, box: handBox)
-        }
-        if indexExtended && middleExtended && ringExtended && littleExtended {
-            return HandSignals(gesture: .openPalm, center: center, area: handArea, fingers: fingers, box: handBox)
-        }
-        if indexExtended && !middleExtended && !ringExtended && !littleExtended {
-            return HandSignals(gesture: .pointing, center: center, area: handArea, fingers: fingers, box: handBox)
-        }
-        // 竖大拇指:其余手指基本握起 + 拇指明显在最上方。
-        if let thumbTip = point(.thumbTip),
-           !middleExtended, !ringExtended, !littleExtended,
-           thumbTip.y > max(indexTip.y, middleTip.y, ringTip.y, littleTip.y) + 0.05 {
-            return HandSignals(gesture: .thumbsUp, center: center, area: handArea, fingers: fingers, box: handBox)
-        }
-        return HandSignals(center: center, area: handArea, fingers: fingers, box: handBox)
-    }
-
-    nonisolated private static func distance(_ a: CGPoint, _ b: CGPoint) -> CGFloat {
-        hypot(a.x - b.x, a.y - b.y)
+        // 不再做静态手型分类(ok/手掌/拇指/指向噪声大);只回传手心/外框,
+        // 供"位置→跟随"和"运动→挥手/上挥"两条路径用。
+        return HandSignals(center: center, area: handArea, box: handBox)
     }
 
     nonisolated private static func boundingArea(_ points: [CGPoint]) -> CGFloat? {

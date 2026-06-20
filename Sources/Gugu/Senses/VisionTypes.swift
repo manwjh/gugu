@@ -15,7 +15,7 @@ enum VisionExpression: String {
 }
 
 enum VisionGesture: String {
-    case wave, openPalm, thumbsUp, ok, pointing
+    case wave    // 手来回摆动
     case flyUp   // 手向上一挥:让咕咕飞一个
 
     var eventKind: String { "gesture_\(rawValue)" }
@@ -23,10 +23,6 @@ enum VisionGesture: String {
     var summary: String {
         switch self {
         case .wave: return "你看见主人向你挥手"
-        case .openPalm: return "你看见主人把手掌伸给你看"
-        case .thumbsUp: return "你看见主人竖起了大拇指"
-        case .ok: return "你看见主人比了一个 OK 手势"
-        case .pointing: return "你看见主人伸出手指指了指"
         case .flyUp: return "你看见主人把手往上一挥,像是让你飞起来"
         }
     }

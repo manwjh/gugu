@@ -17,7 +17,6 @@ package final class Perception {
     private var _ownerVisible = false
     private var lastVisionFrame = Date.distantPast
     private var faceExpr: (v: String, t: Date)?       // 笑/惊讶/困(中性时清空)
-    private var gesture: (v: String, t: Date)?
     private var objects: [String: Date] = [:]         // 物品中文名 -> 最近看见时间
     /// 手的水平位置(0=左 1=右,**主人视角**,已镜像);供"跟随手"等共享坐标交互用。
     package private(set) var handX: CGFloat?
@@ -46,13 +45,12 @@ package final class Perception {
 
     /// 视觉:每帧一次的连续快照(VisionSensor.onFrame)。视觉字段的**唯一入口**——
     /// 不再由零散的去抖事件回调喂养,保证"此刻看见什么"前后一致、随相机开关进退。
-    package func updateVision(present: Bool, expression: String?, gesture: String?,
+    package func updateVision(present: Bool, expression: String?,
                       handX: CGFloat?, objectsNow: [String]) {
         let now = Date()
         lastVisionFrame = now
         _ownerVisible = present
         faceExpr = expression.map { ($0, now) }            // nil=中性,立即清空,不留陈旧情绪
-        if let g = gesture { self.gesture = (g, now) }      // 保持的手型;松手后靠 freshGesture 自然过期
         self.handX = handX
         if handX != nil { handSeen = now }
         for o in objectsNow { objects[o] = now }            // 稳定在场集刷新;移走后靠时间衰减
@@ -84,12 +82,7 @@ package final class Perception {
 
     // MARK: - 派生
 
-    /// 当前手势(若新鲜)。供"指挥/跟随"等实时交互直接读,免走事件流。
-    package func freshGesture(within: TimeInterval = 1.0) -> String? {
-        guard let g = gesture, Date().timeIntervalSince(g.t) < within else { return nil }
-        return g.v
-    }
-
+    /// 是否最近看到手(用于"跟随手":手在画面里且新鲜)。
     package var handFresh: Bool { Date().timeIntervalSince(handSeen) < 0.6 }
 
     private static func timeOfDay(_ now: Date = Date()) -> String {
@@ -119,7 +112,6 @@ package final class Perception {
         }
         let nearby = objects.filter { now.timeIntervalSince($0.value) < 12 }.keys.sorted()
         if !nearby.isEmpty { bits.append("附近有\(nearby.joined(separator: "、"))") }
-        if let g = gesture, now.timeIntervalSince(g.t) < 4 { bits.append("刚比了个手势") }
 
         // 语音/文字
         if let u = lastUserText, now.timeIntervalSince(u.t) < 30 {
