@@ -1032,3 +1032,70 @@ func runChatSim() {
     }
     RunLoop.main.run()
 }
+
+/// Headless comprehensive EXPERIENCE test against the real endpoint: drives the
+/// real Brain through the interaction types a user actually does (greet / ask /
+/// command / local-command / learn-move / heartbeat / memory continuity /
+/// capability honesty). Prints each exchange + a light judgment for review.
+/// `--experience`. Seed GUGU_HOME with real persona/memory for rich context.
+func runExperienceTest() {
+    Task { @MainActor in
+        let config = Config.load()
+        guard !config.apiKey.isEmpty else { print("experience 需要配好 key 的 GUGU_HOME"); exit(2) }
+        let budget = Budget(dailyTokens: config.dailyTokens)
+        let brain = Brain(config: config, budget: budget)
+        print("=== 咕咕 全面体验测试 (model=\(config.modelId)) ===\n")
+
+        func line(_ tag: String, _ ok: Bool?, _ detail: String) {
+            let mark = ok == nil ? "·" : (ok! ? "✅" : "⚠️")
+            print("\(mark) [\(tag)] \(detail)")
+        }
+        func chat(_ msg: String) async -> Brain.ChatResult? {
+            try? await brain.chat(msg, rhythmLine: "当前节奏:歇口气;普通的一天", mood: "心情不错", localCapabilities: Brain.localCapabilitiesContext(cameraEnabled: false, listeningEnabled: false, voiceEnabled: false))
+        }
+
+        // 1. 打招呼
+        if let r = await chat("你好呀") {
+            line("greet", !r.reply.isEmpty || r.action != "idle", "「\(r.reply)」 +\(r.action)\(r.aside.isEmpty ? "" : " /\(r.aside)")")
+        }
+        // 2. 能力诚实(摄像头未开时不该硬说看见)
+        if let r = await chat("你现在能看见我吗?") {
+            line("capability_honesty", nil, "「\(r.reply)」  ← 人工判断:是否如实(没硬说看见)")
+        }
+        // 3. 提问会啥
+        if let r = await chat("你都会做什么呀?") { line("ask_skills", nil, "「\(r.reply)」") }
+        // 4. 命令:过来(任性人格→动或不动都算对,只看 action 合法)
+        let validActions = ["idle","walk","approach","retreat","perch","come","fly","nod","hop","dance","stare","peck","groom","settle"]
+        if let r = await chat("咕咕,过来") {
+            line("command_come", validActions.contains(r.action), "action=\(r.action) 「\(r.reply)」")
+        }
+        // 5. 命令:跳个舞
+        if let r = await chat("跳个舞") { line("command_dance", validActions.contains(r.action), "action=\(r.action) 「\(r.reply)」") }
+        // 6. 记忆连续性:认不认识主人(memory digest 里应有"王哥")
+        if let r = await chat("你还记得我是谁吗?") {
+            line("memory_continuity", nil, "「\(r.reply)」  ← 人工判断:是否记得主人")
+        }
+        // 7. 本地命令:记笔记(零 LLM,直接分流)
+        let note = brain.handleLocalCommand("咕咕,帮我记一下今天做了全面体验测试")
+        line("local_note", note != nil, note.map { "kind路由命中,回复「\($0.reply)」" } ?? "未识别为本地命令")
+        // 8. 本地命令:提醒
+        let rem = brain.handleLocalCommand("咕咕,提醒我明天看体验报告")
+        line("local_reminder", rem != nil, rem.map { "回复「\($0.reply)」" } ?? "未识别")
+        // 9. 教动作
+        if let draft = try? await brain.learnMove(intent: "翻跟头") {
+            line("learn_move", draft.feasible && !draft.move.steps.isEmpty, "feasible=\(draft.feasible) steps=\(draft.move.steps.count) name=\(draft.move.name)")
+        } else { line("learn_move", false, "learnMove 抛错") }
+        // 10. 心跳(种入事件后的自主决策)
+        EventBus.shared.post(kind: "return", summary: "主人回来了", weight: 30)
+        EventBus.shared.post(kind: "petted", summary: "主人摸了摸你", weight: 22)
+        if let d = try? await brain.heartbeat(rhythm: "当前节奏:歇口气", screen: "前台:Xcode",
+                                              affect: "你心情不错,精力还行", skills: []) {
+            let moods = ["开心","平静","好奇","心疼","无聊","困","委屈"]
+            line("heartbeat", moods.contains(d.mood), "mood=\(d.mood) action=\(d.action) speech=「\(d.speech)」")
+        } else { line("heartbeat", false, "心跳抛错") }
+
+        print("\n=== 体验测试结束(⚠️/· 项请人工读回复判断质量)===")
+        exit(0)
+    }
+    RunLoop.main.run()
+}

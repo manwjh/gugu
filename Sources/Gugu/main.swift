@@ -635,6 +635,8 @@ do {
 
 if args.contains("--selftest") {
     runSelfTest()   // never returns
+} else if args.contains("--experience") {
+    runExperienceTest()   // never returns
 } else if args.contains("--chat-sim") {
     runChatSim()   // never returns
 } else if args.contains("--selftest-offline") {
