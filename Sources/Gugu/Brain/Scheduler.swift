@@ -26,11 +26,6 @@ final class Scheduler {
     private var heartbeatFailures = 0
     private var heartbeatBackoffUntil = Date.distantPast
 
-    // 灵光额度跟踪(按天滚动)。
-    private var sparkDay = ""
-    private var sparkUsedToday = 0
-    private var lastSparkAt = Date.distantPast
-
     /// Called with each heartbeat decision so the body can act it out.
     var onDecision: ((HeartbeatDecision) -> Void)?
     /// Called when the pet wakes up from a dream with morning words.
@@ -104,24 +99,18 @@ final class Scheduler {
         heartbeatInFlight = true
         defer { heartbeatInFlight = false }
 
-        // 灵光择机:在抽干好奇心之前,基于当下好奇心 + 每日额度/冷却,决定要不要借更强的脑子。
-        let curiosityNow = EventBus.shared.curiosity
-        let useSpark = decideSpark(curiosity: curiosityNow)
-
         do {
             let decision = try await brain.heartbeat(
                 rhythm: rhythmSensor.promptLine(),
                 screen: screenSensor.promptLine(),
                 affect: affect.promptLine(),
-                skills: brain.memory.activeSkills(rhythm: rhythm),
-                useSpark: useSpark
+                skills: brain.memory.activeSkills(rhythm: rhythm)
             )
             lastHeartbeat = Date()
             heartbeatFailures = 0
             heartbeatBackoffUntil = .distantPast
             EventBus.shared.drainCuriosity()
-            if useSpark { recordSparkUse() }
-            Log.info("heartbeat", "mood=\(decision.mood) action=\(decision.action)\(useSpark ? " ✨spark" : "") speech=\(decision.speech.isEmpty ? "-" : decision.speech)")
+            Log.info("heartbeat", "mood=\(decision.mood) action=\(decision.action) speech=\(decision.speech.isEmpty ? "-" : decision.speech)")
             brain.memory.appendNote(decision.memoryNote)
             onDecision?(decision)
         } catch {
@@ -130,34 +119,6 @@ final class Scheduler {
             Log.info("heartbeat", "失败(发呆,第\(heartbeatFailures)次,退避到 \(Int(heartbeatBackoffUntil.timeIntervalSinceNow))s 后): \(error)")
             // failure = the pet just stares into space; L0 keeps living
         }
-    }
-
-    /// 灵光额度按天滚动:跨天清零。
-    private func rolloverSparkIfNeeded() {
-        let today = Memory.dayString(for: Date())
-        if sparkDay != today {
-            sparkDay = today
-            sparkUsedToday = 0
-        }
-    }
-
-    private func decideSpark(curiosity: Double) -> Bool {
-        rolloverSparkIfNeeded()
-        return SparkPolicy.shouldSpark(.init(
-            enabled: config.sparkEnabled,
-            curiosity: curiosity,
-            heartbeatThreshold: curiosityThreshold,
-            usedToday: sparkUsedToday,
-            dailyLimit: config.sparkDailyLimit,
-            secondsSinceLastSpark: Date().timeIntervalSince(lastSparkAt),
-            cooldown: config.sparkCooldown
-        ))
-    }
-
-    private func recordSparkUse() {
-        rolloverSparkIfNeeded()
-        sparkUsedToday += 1
-        lastSparkAt = Date()
     }
 
     private func maybeDream() {        guard let targetDate = dreamTargetDate(), !dreamInFlight else { return }

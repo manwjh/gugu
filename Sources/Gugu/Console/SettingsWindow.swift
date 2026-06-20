@@ -18,15 +18,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let keyField = NSSecureTextField()
     private let modelField = NSTextField()
 
-    // Advanced fields (tier id overrides: blank = use base model)
-    private let instinctID = NSTextField()
-    private let conversationID = NSTextField()
-    private let dreamID = NSTextField()
-    private let sparkID = NSTextField()
-    private let instinctTokens = NSTextField()
-    private let conversationTokens = NSTextField()
-    private let dreamTokens = NSTextField()
-    private let sparkTokens = NSTextField()
     private let dailyTokens = NSTextField()
 
     private var advancedRevealed = false
@@ -112,16 +103,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         advancedContainer.spacing = 8
         advancedContainer.isHidden = true
 
-        advancedContainer.addArrangedSubview(sectionLabel(L.settingsTierModels))
-        advancedContainer.addArrangedSubview(formRow(L.settingsInstinctModel, instinctID, placeholder: L.settingsInheritsBase))
-        advancedContainer.addArrangedSubview(formRow(L.settingsConversationModel, conversationID, placeholder: L.settingsInheritsBase))
-        advancedContainer.addArrangedSubview(formRow(L.settingsDreamModel, dreamID, placeholder: L.settingsInheritsBase))
-        advancedContainer.addArrangedSubview(formRow(L.settingsSparkModel, sparkID, placeholder: L.settingsSparkOff))
-        advancedContainer.addArrangedSubview(sectionLabel(L.settingsMaxTokens))
-        advancedContainer.addArrangedSubview(formRow(L.settingsInstinctTokens, instinctTokens, placeholder: "200"))
-        advancedContainer.addArrangedSubview(formRow(L.settingsConversationTokens, conversationTokens, placeholder: "400"))
-        advancedContainer.addArrangedSubview(formRow(L.settingsDreamTokens, dreamTokens, placeholder: "1500"))
-        advancedContainer.addArrangedSubview(formRow(L.settingsSparkTokens, sparkTokens, placeholder: "220"))
         advancedContainer.addArrangedSubview(sectionLabel(L.settingsBudget))
         advancedContainer.addArrangedSubview(formRow(L.settingsDailyTokens, dailyTokens, placeholder: "200000"))
         rootStack.addArrangedSubview(advancedContainer)
@@ -204,15 +185,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         providerPopup.selectItem(at: yaml.str("api.provider", "anthropic") == "openai" ? 1 : 0)
         updateURLPlaceholder()
 
-        // Tier overrides: show only if explicitly set, else blank (placeholder).
-        instinctID.stringValue = rawValues["model.instinct_id"] ?? ""
-        conversationID.stringValue = rawValues["model.conversation_id"] ?? ""
-        dreamID.stringValue = rawValues["model.dream_id"] ?? ""
-        sparkID.stringValue = rawValues["model.spark_id"] ?? ""
-        instinctTokens.stringValue = rawValues["model.instinct_max_tokens"] ?? ""
-        conversationTokens.stringValue = rawValues["model.conversation_max_tokens"] ?? ""
-        dreamTokens.stringValue = rawValues["model.dream_max_tokens"] ?? ""
-        sparkTokens.stringValue = rawValues["model.spark_max_tokens"] ?? ""
         dailyTokens.stringValue = rawValues["budget.daily_tokens"] ?? ""
     }
 
@@ -278,14 +250,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         sync("api.url", urlField, deletable: false)
         sync("api.key", keyField, deletable: false)
         sync("model.id", modelField, deletable: false)
-        sync("model.instinct_id", instinctID, deletable: true)
-        sync("model.conversation_id", conversationID, deletable: true)
-        sync("model.dream_id", dreamID, deletable: true)
-        sync("model.spark_id", sparkID, deletable: true)
-        sync("model.instinct_max_tokens", instinctTokens, deletable: false)
-        sync("model.conversation_max_tokens", conversationTokens, deletable: false)
-        sync("model.dream_max_tokens", dreamTokens, deletable: false)
-        sync("model.spark_max_tokens", sparkTokens, deletable: false)
         sync("budget.daily_tokens", dailyTokens, deletable: false)
 
         if !changes.isEmpty {

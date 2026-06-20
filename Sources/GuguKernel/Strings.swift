@@ -495,18 +495,6 @@ package enum L {
     package static var settingsKey: String { s("密钥", "API Key") }
     package static var settingsModel: String { s("模型", "Model") }
     package static var settingsAdvanced: String { s("高级", "Advanced") }
-    package static var settingsTierModels: String { s("分层模型(留空=用上面的模型)", "Per-tier models (blank = use base)") }
-    package static var settingsInheritsBase: String { s("继承基础模型", "inherits base model") }
-    package static var settingsSparkOff: String { s("留空=不启用灵光", "blank = spark off") }
-    package static var settingsInstinctModel: String { s("心跳层", "Instinct") }
-    package static var settingsConversationModel: String { s("对话层", "Conversation") }
-    package static var settingsDreamModel: String { s("梦境层", "Dream") }
-    package static var settingsSparkModel: String { s("灵光层", "Spark") }
-    package static var settingsMaxTokens: String { s("输出上限(tokens)", "Max output (tokens)") }
-    package static var settingsInstinctTokens: String { s("心跳层", "Instinct") }
-    package static var settingsConversationTokens: String { s("对话层", "Conversation") }
-    package static var settingsDreamTokens: String { s("梦境层", "Dream") }
-    package static var settingsSparkTokens: String { s("灵光层", "Spark") }
     package static var settingsBudget: String { s("预算", "Budget") }
     package static var settingsDailyTokens: String { s("每日 tokens", "Daily tokens") }
     package static var settingsSave: String { s("保存", "Save") }

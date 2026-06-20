@@ -635,6 +635,8 @@ do {
 
 if args.contains("--selftest") {
     runSelfTest()   // never returns
+} else if args.contains("--chat-sim") {
+    runChatSim()   // never returns
 } else if args.contains("--selftest-offline") {
     runOfflineSelfTest()   // never returns
 } else if args.contains("--audit-report") {

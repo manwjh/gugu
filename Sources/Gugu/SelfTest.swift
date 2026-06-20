@@ -17,7 +17,7 @@ func runSelfTest() {
         // 1. Config
         let config = Config.load()
         check("config", !config.apiKey.isEmpty && config.apiURL.contains("http"),
-              "url=\(config.apiURL) instinct=\(config.instinct.id) conv=\(config.conversation.id)")
+              "url=\(config.apiURL) model=\(config.modelId)")
 
         let budget = Budget(dailyTokens: config.dailyTokens)
         let brain = Brain(config: config, budget: budget)
@@ -351,7 +351,7 @@ func runOfflineSelfTest() {
 
         let budget = Budget(dailyTokens: 1000)
         let before = budget.usage.total
-        budget.record(inputChars: 320, outputChars: 64, tier: config.instinct)
+        budget.record(inputChars: 320, outputChars: 64, label: "instinct")
         check("budget", budget.usage.total > before && budget.usage.calls > 0,
               "delta=\(budget.usage.total - before) total=\(budget.usage.total)")
 
@@ -923,34 +923,7 @@ func runOfflineSelfTest() {
                   "counts=\(c1),\(c2),\(c3),reset=\(cReset)")
         }
 
-        // MARK: - 语言魅力(择机灵光模型)/ 共同能动性(联网框架)
-
-        // SparkPolicy:高好奇心 + 有额度 + 过冷却才点亮;未配置则永不点亮
-        do {
-            let base = SparkPolicy.Inputs(enabled: true, curiosity: 60, heartbeatThreshold: 30,
-                                          usedToday: 0, dailyLimit: 6,
-                                          secondsSinceLastSpark: 9999, cooldown: 5400)
-            let spark = SparkPolicy.shouldSpark(base)                          // 60 ≥ 30*2 → 点亮
-            var lowCuriosity = base; lowCuriosity.curiosity = 40
-            let noSparkLow = SparkPolicy.shouldSpark(lowCuriosity)             // 40 < 60 → 不点
-            var cappedToday = base; cappedToday.usedToday = 6
-            let noSparkCap = SparkPolicy.shouldSpark(cappedToday)              // 额度用尽 → 不点
-            var cooling = base; cooling.secondsSinceLastSpark = 60
-            let noSparkCool = SparkPolicy.shouldSpark(cooling)                 // 冷却未过 → 不点
-            var disabled = base; disabled.enabled = false
-            let noSparkOff = SparkPolicy.shouldSpark(disabled)                 // 未配置 → 永不点
-            check("spark.policy",
-                  spark && !noSparkLow && !noSparkCap && !noSparkCool && !noSparkOff,
-                  "spark=\(spark) low=\(noSparkLow) cap=\(noSparkCap) cool=\(noSparkCool) off=\(noSparkOff)")
-        }
-
-        // 默认配置下灵光未启用(spark_id 为空)= 零行为变化、完全向后兼容
-        do {
-            let cfg = Config.load()
-            check("spark.disabled_by_default",
-                  !cfg.sparkEnabled && cfg.spark.id.isEmpty,
-                  "sparkEnabled=\(cfg.sparkEnabled) id=「\(cfg.spark.id)」")
-        }
+        // MARK: - 共同能动性(联网框架)
 
         // web_search 工具:未授权时被拒、不落盘;授权后记录到 research_requests.jsonl
         do {
@@ -1058,6 +1031,54 @@ func runOfflineSelfTest() {
 
         print(failures == 0 ? "=== 全部通过 ===" : "=== \(failures) 项失败 ===")
         exit(failures == 0 ? 0 : 1)
+    }
+    RunLoop.main.run()
+}
+
+/// Headless MULTI-ROUND chat against the real endpoint, on a single Brain so
+/// chatHistory accumulates (reproduces multi-round degradation). Flags replies
+/// that look like leaked chain-of-thought or rambling. Run with a GUGU_HOME that
+/// has a real key (copy the real config.yaml/persona.md/memory in to reproduce
+/// the rich-context condition). `--chat-sim`.
+func runChatSim() {
+    Task { @MainActor in
+        let config = Config.load()
+        guard !config.apiKey.isEmpty else { print("chat-sim 需要配好 key 的 GUGU_HOME"); exit(2) }
+        let budget = Budget(dailyTokens: config.dailyTokens)
+        let brain = Brain(config: config, budget: budget)
+        print("=== 咕咕 多轮对话仿真 (model=\(config.modelId)) ===")
+
+        let script = ["你好呀", "你忙啥呢？", "在看啥呢", "开心吗？", "你喜欢我吗？",
+                      "你忙啥呢？", "今天累不累", "你忙啥呢？", "喜欢我吗", "再见啦"]
+
+        // 检测疑似泄漏/退化:思考独白通常很长、以括号开头、或带"我们/用户/应该/JSON"等元话语。
+        func suspicious(_ s: String) -> String? {
+            if s.isEmpty { return nil }                                  // 空=非语言降级,正常
+            if s.count > 40 { return "过长(\(s.count)字)" }
+            if s.hasPrefix("（") || s.hasPrefix("(") { return "括号内心独白" }
+            for k in ["我们", "用户", "JSON", "应该", "需要输出", "作为一只", "可以简短", "我需要"] where s.contains(k) {
+                return "含思考标记[\(k)]"
+            }
+            return nil
+        }
+
+        var bad = 0, errs = 0
+        for (i, msg) in script.enumerated() {
+            do {
+                let r = try await brain.chat(msg, rhythmLine: "当前节奏:歇口气;普通的一天", mood: "心情不错")
+                let flag = suspicious(r.reply)
+                if flag != nil { bad += 1 }
+                let asideStr = r.aside.isEmpty ? "" : " aside:「\(r.aside)」"
+                print("第\(i+1)轮 主人:「\(msg)」")
+                print("   → reply:「\(r.reply)」 action=\(r.action)\(asideStr)  \(flag.map { "⚠️ " + $0 } ?? "✅")")
+            } catch {
+                errs += 1
+                print("第\(i+1)轮 主人:「\(msg)」 → 异常: \(error)")
+            }
+        }
+        print(bad == 0 && errs == 0 ? "=== 多轮无退化、无泄漏 ✅ ==="
+                                    : "=== 疑似退化 \(bad) 轮 / 异常 \(errs) 轮 ❌ ===")
+        exit(bad == 0 && errs == 0 ? 0 : 1)
     }
     RunLoop.main.run()
 }

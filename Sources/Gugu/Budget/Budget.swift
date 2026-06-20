@@ -12,7 +12,8 @@ final class Budget {
         var calls: Int
         var tokensIn: Int
         var tokensOut: Int
-        /// Per-tier token totals (in+out), keyed by ModelTier.name.
+        /// Per-call-type token totals (in+out), keyed by call label
+        /// ("instinct" / "conversation" / "dream").
         var byTier: [String: Int] = [:]
 
         var total: Int { tokensIn + tokensOut }
@@ -50,14 +51,14 @@ final class Budget {
         max(1, Int(ceil(Double(chars) / 3.2)))
     }
 
-    func record(inputChars: Int, outputChars: Int, tier: ModelTier) {
+    func record(inputChars: Int, outputChars: Int, label: String) {
         rolloverIfNeeded()
         let tin = Budget.estimateTokens(chars: inputChars)
         let tout = Budget.estimateTokens(chars: outputChars)
         usage.tokensIn += tin
         usage.tokensOut += tout
         usage.calls += 1
-        usage.byTier[tier.name, default: 0] += tin + tout
+        usage.byTier[label, default: 0] += tin + tout
         save()
     }
 

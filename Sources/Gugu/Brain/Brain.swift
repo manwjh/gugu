@@ -115,20 +115,18 @@ final class Brain {
         """
     }
 
-    func heartbeat(rhythm: String, screen: String, affect: String, skills: [String], useSpark: Bool = false) async throws -> HeartbeatDecision {
+    func heartbeat(rhythm: String, screen: String, affect: String, skills: [String]) async throws -> HeartbeatDecision {
         let userMsg = heartbeatUserMessage(rhythm: rhythm, screen: screen, affect: affect, skills: skills)
-        // 灵光时机:临时借用更强的模型,并放宽一点输出长度,让这一句更有灵性。
-        let tier = useSpark && config.sparkEnabled ? config.spark : config.instinct
         let reply = try await client.create(
-            model: tier.id,
-            maxTokens: tier.maxTokens,
+            model: config.modelId,
+            maxTokens: 200,
             system: systemPrompt,
             messages: [["role": "user", "content": userMsg]],
             schema: Brain.heartbeatSchema,
             policy: .heartbeat
         )
         budget.record(inputChars: personaText.count + userMsg.count,
-                      outputChars: reply.text.count, tier: tier)
+                      outputChars: reply.text.count, label: "instinct")
         return try Brain.parseHeartbeat(reply.text)
     }
 
@@ -294,13 +292,14 @@ final class Brain {
             messages.append(["role": turn.role == "user" ? "user" : "assistant", "content": content])
         }
 
-        // budget degrade: drop from conversation tier to the cheaper instinct tier when running hot
-        let tier = budget.degradeLevel >= 1 ? config.instinct : config.conversation
+        // budget degrade: shorter output when running hot (one model — it's the
+        // token cap that drops, not the model).
+        let maxTokens = budget.degradeLevel >= 1 ? 200 : 400
         let reply: LLMReply
         do {
             reply = try await client.create(
-                model: tier.id,
-                maxTokens: max(tier.maxTokens, 300),
+                model: config.modelId,
+                maxTokens: maxTokens,
                 system: systemPrompt,
                 messages: messages,
                 schema: Brain.chatSchema,
@@ -317,7 +316,7 @@ final class Brain {
             throw e
         }
         budget.record(inputChars: personaText.count + messages.reduce(0) { $0 + (($1["content"] as? String)?.count ?? 0) },
-                      outputChars: reply.text.count, tier: tier)
+                      outputChars: reply.text.count, label: "conversation")
 
         // Default empty (not reply.text): chat always requests structured JSON,
         // so if extraction fails we degrade to an action-only / blank reply rather
@@ -433,7 +432,7 @@ final class Brain {
         let system = L.learnMoveSystemPrompt
         let user = L.learnMoveUserMessage(intent)
         let reply = try await client.create(
-            model: config.instinct.id,
+            model: config.modelId,
             maxTokens: 600,
             system: system + "\n\n" + Brain.moveFormatSpec + "\n\n" + L.llmLanguageDirective,
             messages: [["role": "user", "content": user]],
@@ -441,7 +440,7 @@ final class Brain {
             policy: .chat
         )
         budget.record(inputChars: system.count + user.count,
-                      outputChars: reply.text.count, tier: config.instinct)
+                      outputChars: reply.text.count, label: "instinct")
         let draft = try Brain.parseMoveDraft(reply.text, fallbackName: intent)
         Log.info("learn_move", "草稿:name=\(draft.move.name) feasible=\(draft.feasible) steps=\(draft.move.steps.count) | 原文前120: \(reply.text.prefix(120))")
         return draft
@@ -533,15 +532,15 @@ final class Brain {
     func dream(for date: Date = Date()) async throws -> DreamResult {
         let user = dreamPrompt(for: date)
         let reply = try await client.create(
-            model: config.dream.id,
-            maxTokens: config.dream.maxTokens,
+            model: config.modelId,
+            maxTokens: 1500,
             system: systemPrompt,
             messages: [["role": "user", "content": user]],
             schema: Brain.dreamSchema,
             policy: .dream
         )
         budget.record(inputChars: systemPrompt.count + user.count,
-                      outputChars: reply.text.count, tier: config.dream)
+                      outputChars: reply.text.count, label: "dream")
 
         guard let data = Brain.extractJSON(reply.text)?.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -556,13 +555,13 @@ final class Brain {
         let user = dreamPrompt(for: date)
         let batch = try await batchClient().createMessageBatch(
             customID: customID,
-            model: config.dream.id,
-            maxTokens: config.dream.maxTokens,
+            model: config.modelId,
+            maxTokens: 1500,
             system: systemPrompt,
             messages: [["role": "user", "content": user]],
             schema: Brain.dreamSchema
         )
-        budget.record(inputChars: systemPrompt.count + user.count, outputChars: 1, tier: config.dream)
+        budget.record(inputChars: systemPrompt.count + user.count, outputChars: 1, label: "dream")
         let state = DreamBatchState(
             batchID: batch.id,
             customID: customID,

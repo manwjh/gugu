@@ -69,15 +69,6 @@ package struct MiniYAML {
     }
 }
 
-/// One model tier (L2 instinct / L3 conversation / L4 dream). Each tier names a
-/// model id and its output cap. Tiers may all point at the same model id — the
-/// split is about call frequency and token caps, not necessarily distinct models.
-package struct ModelTier {
-    package var name: String      // "instinct" / "conversation" / "dream", for metering
-    package var id: String
-    package var maxTokens: Int
-}
-
 /// Loaded application configuration. Re-loadable at runtime (hot reload).
 package struct Config {
     package var apiURL: String
@@ -86,22 +77,10 @@ package struct Config {
     /// (Chat Completions, for OpenAI-compatible vendors).
     package var apiProvider: String
 
-    /// L2 心跳。
-    package var instinct: ModelTier
-    /// L3 对话。
-    package var conversation: ModelTier
-    /// L4 梦境。
-    package var dream: ModelTier
-    /// 可选「灵光」层:择机临时借用的更强模型,只在罕见高价值时机用一次,带每日上限+冷却。
-    /// id 为空表示未配置——此时一切行为与原来完全一致(零成本、零变化)。
-    package var spark: ModelTier
-    /// 灵光模型每天最多用几次(0 或 spark.id 为空都表示禁用)。
-    package var sparkDailyLimit: Int
-    /// 两次灵光之间的最小冷却(秒)。
-    package var sparkCooldown: TimeInterval
-
-    /// 灵光层是否启用(配置了 id 且每日上限 > 0)。
-    package var sparkEnabled: Bool { !spark.id.isEmpty && sparkDailyLimit > 0 }
+    /// The single model used for everything (heartbeat / chat / dream). Per-call
+    /// token caps live in code (the call sites), not config — keeping the model
+    /// config to one knob. (Design §1.1: the layers share one model by default.)
+    package var modelId: String
 
     package var dailyTokens: Int
     package var heartbeatMin: TimeInterval
@@ -128,30 +107,11 @@ package struct Config {
     package static func load() -> Config {
         let text = (try? String(contentsOf: Paths.config, encoding: .utf8)) ?? ""
         let y = MiniYAML(text: text)
-        // Shared base model id; each tier may override it with its own id.
-        let baseID = y.str("model.id", "deepseek-v4-flash")
         return Config(
             apiURL: y.str("api.url", "https://taas.hk"),
             apiKey: y.str("api.key", ""),
             apiProvider: y.str("api.provider", "openai"),
-            instinct: ModelTier(
-                name: "instinct",
-                id: y.str("model.instinct_id", baseID),
-                maxTokens: y.int("model.instinct_max_tokens", 200)),
-            conversation: ModelTier(
-                name: "conversation",
-                id: y.str("model.conversation_id", baseID),
-                maxTokens: y.int("model.conversation_max_tokens", 400)),
-            dream: ModelTier(
-                name: "dream",
-                id: y.str("model.dream_id", baseID),
-                maxTokens: y.int("model.dream_max_tokens", 1500)),
-            spark: ModelTier(
-                name: "spark",
-                id: y.str("model.spark_id", ""),
-                maxTokens: y.int("model.spark_max_tokens", 220)),
-            sparkDailyLimit: y.int("model.spark_daily_limit", 6),
-            sparkCooldown: y.double("model.spark_cooldown", 5400),
+            modelId: y.str("model.id", "deepseek-v4-flash"),
             dailyTokens: y.int("budget.daily_tokens", 200_000),
             heartbeatMin: y.double("heartbeat.min_interval", 600),
             heartbeatMax: y.double("heartbeat.max_interval", 3600),
@@ -185,17 +145,7 @@ package struct Config {
               provider: openai   # openai(Chat Completions,默认)或 anthropic(Messages API)
 
             model:
-              id: deepseek-v4-flash    # 三层共用的基础模型;按层覆盖见下方可选项
-              instinct_max_tokens: 200       # L2 心跳
-              conversation_max_tokens: 400   # L3 对话
-              dream_max_tokens: 1500         # L4 梦境
-              # instinct_id / conversation_id / dream_id: 留空则用上面的 id
-              # 可选「灵光」:罕见高价值时机临时借一次更强的脑子,让偶尔一句话更有灵性。
-              # 留空 spark_id = 完全不启用(零成本、零变化)。
-              # spark_id: claude-opus-4-8
-              spark_max_tokens: 220
-              spark_daily_limit: 6           # 每天最多借用几次(0=禁用)
-              spark_cooldown: 5400           # 两次灵光最小间隔(秒)
+              id: deepseek-v4-flash    # 唯一模型,心跳/对话/梦境共用;per-call token 上限在代码里
 
             budget:
               daily_tokens: 200000     # 今日 token 用完了就困了去睡觉(本地按字符估算)
