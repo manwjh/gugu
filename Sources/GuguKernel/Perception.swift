@@ -18,8 +18,9 @@ package final class Perception {
     private var lastVisionFrame = Date.distantPast
     private var faceExpr: (v: String, t: Date)?       // 笑/惊讶/困(中性时清空)
     private var objects: [String: Date] = [:]         // 物品中文名 -> 最近看见时间
-    /// 手的水平位置(0=左 1=右,**主人视角**,已镜像);供"跟随手"等共享坐标交互用。
+    /// 指尖位置(主人视角,已镜像):x 0=左 1=右,y 0=下 1=上。供"逗它玩/跟随手指"用。
     package private(set) var handX: CGFloat?
+    package private(set) var handY: CGFloat?
     private var handSeen = Date.distantPast
     /// 摄像头关闭/无帧时视觉即视为"无"——避免拿陈旧的"看得见主人"骗脑子。
     private var visionFresh: Bool { Date().timeIntervalSince(lastVisionFrame) < 1.5 }
@@ -46,12 +47,13 @@ package final class Perception {
     /// 视觉:每帧一次的连续快照(VisionSensor.onFrame)。视觉字段的**唯一入口**——
     /// 不再由零散的去抖事件回调喂养,保证"此刻看见什么"前后一致、随相机开关进退。
     package func updateVision(present: Bool, expression: String?,
-                      handX: CGFloat?, objectsNow: [String]) {
+                      handX: CGFloat?, handY: CGFloat?, objectsNow: [String]) {
         let now = Date()
         lastVisionFrame = now
         _ownerVisible = present
         faceExpr = expression.map { ($0, now) }            // nil=中性,立即清空,不留陈旧情绪
         self.handX = handX
+        self.handY = handY
         if handX != nil { handSeen = now }
         for o in objectsNow { objects[o] = now }            // 稳定在场集刷新;移走后靠时间衰减
     }

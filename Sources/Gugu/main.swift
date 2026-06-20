@@ -290,7 +290,7 @@ final class GuguApp: NSObject, NSApplicationDelegate {
         visionSensor.onFrame = { [weak self] f in
             guard let self else { return }
             Perception.shared.updateVision(present: f.ownerPresent, expression: f.expression,
-                                           handX: f.handX, objectsNow: f.objectsNow)
+                                           handX: f.handX, handY: f.handY, objectsNow: f.objectsNow)
             self.visionDebug.update(f)
         }
     }

@@ -303,7 +303,8 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
             f.ownerPresent = facePresent                       // 迟滞平滑后的"在不在"
             f.expression = [VisionExpression.smile, .surprised, .sleepy]
                 .last { expressionStreak[$0, default: 0] >= 3 }?.rawValue
-            f.handX = hand.box.map { 1 - $0.midX }             // 镜像成主人视角,收口在此
+            f.handX = hand.center.map { 1 - $0.x }             // 指尖水平位:镜像成主人视角(0左1右)
+            f.handY = hand.center.map { $0.y }                 // 指尖垂直位(Vision 直立坐标,0下1上)
             f.objectsNow = videoTracker.presentObjectLabels()  // 稳定在场集(已去抖),非每帧原始
             // —— 调试层(原始数值)——
             f.facePresent = face.present
@@ -488,22 +489,14 @@ final class VisionSensor: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
             guard let recognized = points[name], recognized.confidence >= minConfidence else { return nil }
             return recognized.location
         }
-        guard let indexTip = point(.indexTip),
-              let middleTip = point(.middleTip),
-              let ringTip = point(.ringTip),
-              let littleTip = point(.littleTip) else {
+        // 追"指尖":优先食指尖(指向时最稳),退到中指尖、再退到手腕——
+        // 只要画面里有手就有一个可追的点,不强求 4 指都识别到(1~2 根手指也行)。
+        guard let tip = point(.indexTip) ?? point(.middleTip) ?? point(.wrist) else {
             return HandSignals()
         }
-
-        let fingertips = [indexTip, middleTip, ringTip, littleTip]
-        let center = CGPoint(x: fingertips.map(\.x).reduce(0, +) / CGFloat(fingertips.count),
-                             y: fingertips.map(\.y).reduce(0, +) / CGFloat(fingertips.count))
         let allPoints = points.values.filter { $0.confidence >= minConfidence }.map(\.location)
-        let handArea = boundingArea(allPoints)
-        let handBox = boundingBox(allPoints)
-        // 不再做静态手型分类(ok/手掌/拇指/指向噪声大);只回传手心/外框,
-        // 供"位置→跟随"和"运动→挥手/上挥"两条路径用。
-        return HandSignals(center: center, area: handArea, box: handBox)
+        // center 即指尖:供"位置→跟随"和"运动→挥手/上挥"两条路径用。
+        return HandSignals(center: tip, area: boundingArea(allPoints), box: boundingBox(allPoints))
     }
 
     nonisolated private static func boundingArea(_ points: [CGPoint]) -> CGFloat? {

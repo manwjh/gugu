@@ -333,26 +333,33 @@ final class PetController: NSObject {
             }
 
         case .followHand:
-            // 走向手的水平位置(共享坐标:handX 0=左 1=右,已是主人视角)。手离开就回 idle。
+            // 逗它玩:飞向指尖的 2D 位置,懒散缓动、跟不太紧;到跟前偶尔啄一下。
             let world = currentWorld
-            guard Perception.shared.handFresh, let hx = Perception.shared.handX else {
-                bird.position.y = feetY
-                transition(to: .idle)
+            guard Perception.shared.handFresh,
+                  let nx = Perception.shared.handX, let ny = Perception.shared.handY else {
+                loseFingerInterest()
                 break
             }
-            let targetX = world.minX + hx * (world.maxX - world.minX)
-            origin.y = world.groundY
-            let dx = targetX - origin.x
-            if abs(dx) > 6 {
+            let tx = world.minX + nx * (world.maxX - world.minX)
+            let ty = world.groundY + ny * (world.ceilingY - world.groundY)
+            let dx = tx - origin.x, dy = ty - origin.y
+            let dist = hypot(dx, dy)
+            if dist > 26 {
                 setFacing(right: dx > 0)
-                let speed: CGFloat = 160
-                origin.x += (dx > 0 ? 1 : -1) * min(abs(dx), speed * dt)
-                origin.x = max(world.minX, min(origin.x, world.maxX))
-                bird.position.y = feetY + abs(sin(Date().timeIntervalSince1970 * 10)) * 3
+                let maxStep: CGFloat = 190 * dt                 // 限速:慵懒,追不太上
+                let step = min(dist * 0.12, maxStep)            // 指数缓动:近了慢、远了也不暴冲
+                origin.x += dx / dist * step
+                origin.y += dy / dist * step
+                bird.position.y = feetY + sin(Date().timeIntervalSince1970 * 12) * 2   // 飞行微颤
+                window.setFrameOrigin(origin)
             } else {
                 bird.position.y = feetY
+                window.setFrameOrigin(origin)
+                if Date().timeIntervalSince(lastChasePeck) > 1.0 {   // 到指尖跟前:逗一下
+                    lastChasePeck = Date()
+                    bird.peckOnce()
+                }
             }
-            window.setFrameOrigin(origin)
 
         default:
             break
@@ -469,13 +476,45 @@ final class PetController: NSObject {
         transition(to: .falling)
     }
 
-    /// 跟随手:只要画面里有手(handFresh + handX),咕咕就走向手的水平位置(共享坐标,
-    /// 天然不猜左右);手离开画面就停。统一的"手部运动跟随",不再依赖任何静态手型。
+    // 逗它玩:指尖在画面里**动**才会引起注意(静止的手不追);追的是指尖的 2D 位置,
+    // 飞着懒散地跟、跟不太紧;指尖不动 ~2s 或离开画面 → 失去兴趣,回去自己玩。
+    private var lastFingerMove = Date.distantPast
+    private var prevFingerNorm: CGPoint?
+    private var lastChasePeck = Date.distantPast
+
     private func updateHandFollow() {
         let free = (state == .idle || state == .walk || state == .followHand)
-        if free, Perception.shared.handFresh, Perception.shared.handX != nil {
-            if state != .followHand { transition(to: .followHand) }
+        let now = Date()
+        guard Perception.shared.handFresh,
+              let nx = Perception.shared.handX, let ny = Perception.shared.handY else {
+            prevFingerNorm = nil
+            if state == .followHand { loseFingerInterest() }
+            return
+        }
+        let p = CGPoint(x: nx, y: ny)
+        if let prev = prevFingerNorm, hypot(p.x - prev.x, p.y - prev.y) > 0.02 {
+            lastFingerMove = now                      // 指尖动了一下(低灵敏:微抖不算)
+        }
+        prevFingerNorm = p
+        let playing = now.timeIntervalSince(lastFingerMove) < 2.0   // 2s 不动=失去兴趣
+        if free, playing {
+            if state != .followHand {
+                transition(to: .followHand)
+                bird.tiltHead(true)                   // "咦?" 注意到了
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.bird.tiltHead(false) }
+            }
         } else if state == .followHand {
+            loseFingerInterest()
+        }
+    }
+
+    /// 失去兴趣:在空中就**优雅滑落**(交给重力,落地不翻滚,与主动飞行一致);在地面就回 idle。
+    private func loseFingerInterest() {
+        if window.frame.origin.y > currentWorld.groundY + 2 {
+            gracefulFlight = true                       // 轻盈落地,不当摔倒翻滚
+            vel = CGVector(dx: 0, dy: -40)              // 从悬停起一个柔和的初速,自然滑下而非僵在空中
+            transition(to: .falling)
+        } else {
             bird.position.y = feetY
             transition(to: .idle)
         }

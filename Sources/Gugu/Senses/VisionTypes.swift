@@ -121,8 +121,8 @@ struct VisionFrame {
     // —— 语义层(已平滑,给 Perception 连续读)——
     var ownerPresent = false              // 经迟滞平滑的"主人在不在"
     var expression: String?               // 当前表情(连续 3 帧确认;无=中性)
-    var gesture: String?                  // 当前保持的手型(2 帧确认;无=没摆手型)
-    var handX: CGFloat?                    // 手水平位置 0=左 1=右(主人视角,已镜像)
+    var handX: CGFloat?                    // 指尖水平位 0=左 1=右(主人视角,已镜像)
+    var handY: CGFloat?                    // 指尖垂直位 0=下 1=上(Vision 直立坐标)
     var objectsNow: [String] = []         // 当前稳定在场的具体物品(中文名;已去抖,非每帧原始)
 
     // —— 调试层(原始数值,给调试窗口调阈值)——
