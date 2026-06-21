@@ -3,7 +3,7 @@
 ## Current State
 
 - GitHub Release is live: https://github.com/manwjh/gugu/releases/tag/v2.3.0
-- GitHub Pages website is prepared at: https://manwjh.github.io/gugu/
+- GitHub Pages website is live and set as repository homepage: https://manwjh.github.io/gugu/
 - Early feedback issue is live and pinned: https://github.com/manwjh/gugu/issues/1
 - GitHub launch discussion is live: https://github.com/manwjh/gugu/discussions/2
 - Media kit is available: https://github.com/manwjh/gugu/blob/main/docs/MEDIA_KIT.md
