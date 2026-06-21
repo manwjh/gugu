@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Launch plan and posting copy
+    url: https://github.com/manwjh/gugu/blob/main/docs/LAUNCH.md
+    about: Read the launch plan before opening launch/distribution issues.
