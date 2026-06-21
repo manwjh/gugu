@@ -67,6 +67,20 @@ Before final submission through browser UI, confirm with the owner because posti
 
 ## Next Channels
 
+## Hacker News
+
+Status: blocked by login.
+
+Visited:
+
+```text
+https://news.ycombinator.com/submit
+```
+
+Current browser state shows the Hacker News login/create-account page. Use the Show HN copy in `docs/POSTS.md` after login.
+
+## Next Channels
+
 - 即刻/朋友圈/技术群: use the short Chinese post in `docs/POSTS.md`.
-- Hacker News: use the Show HN copy in `docs/POSTS.md` after the first Chinese feedback cycle.
-- Reddit: use the Reddit copy in `docs/POSTS.md` after README has been adjusted from first feedback.
+- Reddit: use the Reddit copy in `docs/POSTS.md` after login.
+- X/Twitter: use the X copy in `docs/POSTS.md` after login.
