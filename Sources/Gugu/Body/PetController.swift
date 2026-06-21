@@ -194,7 +194,7 @@ final class PetController: NSObject {
     private var walkTargetX: CGFloat?
     var homeFrame: CGRect?            // 小窝包围框(屏幕坐标);非 nil 表示在小窝(房间)里
     var platforms: [Platform] = []    // 房间内的平台(归一化坐标)
-    private var behaviorTimer: Timer?
+    private var behaviorLoop: PetBehaviorLoop?
     private var physicsTimer: Timer?
     /// "脚下踩着什么"——支撑面。**只能经 setSupport(_:) 写入**(setter 文件私有)。
     private(set) var supportSurface: SupportSurface?
@@ -253,7 +253,8 @@ final class PetController: NSObject {
         refreshGrowthStage()
         bird.startIdleAnimations()
         startPhysics()
-        startBehaviorLoop()
+        behaviorLoop = PetBehaviorLoop(body: self)
+        behaviorLoop?.start()
     }
 
     // MARK: - Geometry helpers
@@ -621,102 +622,88 @@ final class PetController: NSObject {
         }
     }
 
-    // MARK: - Autonomous idle life (zero cost)
+    // MARK: - Autonomous idle life — 执行口(调度与决策在 PetBehaviorLoop)
 
-    private func startBehaviorLoop() {
-        scheduleNextBehavior()
+    /// 此刻能否插入 idle 自娱:不在"别打断"窗口内,且站着或栖着。
+    var acceptsIdleBehavior: Bool { Date() > stateUntil && (state == .idle || state == .perch) }
+    /// 栖息态(idle 决策树据此走 perched 分支)。
+    var isPerchedIdle: Bool { state == .perch }
+    /// 当前站在哪条平台上(没站平台 → nil)。
+    var standingPlatformId: UUID? { supportSurface?.platformId }
+    /// 完全没有支撑面(房间地板上)。
+    var isUnsupported: Bool { supportSurface == nil }
+    var hasPlatforms: Bool { !platforms.isEmpty }
+    /// 当下心情(未注入 → 中性值)。
+    var idleMood: (energy: Double, valence: Double) { idleMoodProvider?() ?? (energy: 0.7, valence: 0.15) }
+    /// idle 时可"自己玩"的一个动作名。
+    var availableIdlePlayMove: String? { idlePlayMoveProvider?() }
+
+    /// 平台够长可踱步(两端窗口 x 跨度 > 30)。
+    func platformWalkable(_ id: UUID) -> Bool {
+        guard let plat = platforms.first(where: { $0.id == id }), let r = platformOriginXRange(plat) else { return false }
+        return r.max - r.min > 30
+    }
+    /// 随机另一条平台(只有一条 → nil)。
+    func randomOtherPlatformId(besides id: UUID) -> UUID? {
+        guard platforms.count > 1 else { return nil }
+        return platforms.filter { $0.id != id }.randomElement()?.id
     }
 
-    private func scheduleNextBehavior() {
-        behaviorTimer?.invalidate()
-        let delay = Double.random(in: 4...10)
-        behaviorTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
-            Task { @MainActor in
-                self?.idleMicroBehavior()
-                self?.scheduleNextBehavior()
-            }
+    func idleWalkAlongPlatform(_ id: UUID) {
+        guard let plat = platforms.first(where: { $0.id == id }), let r = platformOriginXRange(plat) else { return }
+        walkTargetX = CGFloat.random(in: r.min...r.max)
+        transition(to: .walk)
+    }
+    func idleJumpToPlatform(_ id: UUID) {
+        setSupport(.platform(id: id))
+        transition(to: .flyingToPerch)
+        bird.setViewDirection(.side)
+        bird.flapWings(times: 12, fast: true)
+    }
+    func idleJumpOffPlatform() {
+        setSupport(nil)
+        bird.flapWings(times: 4, fast: true)
+        vel = CGVector(dx: CGFloat.random(in: -50...50), dy: 0)
+        bird.position.y = feetY
+        transition(to: .falling)
+    }
+    /// 平台上原地小动作(5 选 1)。
+    func runStandingPlatformMicro() {
+        switch Int.random(in: 0..<5) {
+        case 0: bird.setViewDirection(.side); bird.groomOnce()
+        case 1: bird.setViewDirection(.front); bird.peckOnce()
+        case 2:
+            bird.setViewDirection(.front)
+            bird.tiltHead(true)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in self?.bird.tiltHead(false) }
+        case 3: bird.setViewDirection(.front); bird.flapWings(times: 2)
+        default: bird.stretchOnce()
         }
     }
+    func idleFlyUpToRandomPlatform() {
+        guard let target = platforms.randomElement() else { return }
+        setSupport(.platform(id: target.id))
+        transition(to: .flyingToPerch)
+        bird.setViewDirection(.side)
+        bird.flapWings(times: 14, fast: true)
+    }
+    func idleWalkToGroundTarget() {
+        walkTargetX = randomGroundWalkTargetX(in: currentWorld)
+        transition(to: .walk)
+    }
 
-    private func idleMicroBehavior() {
-        guard Date() > stateUntil else { return }
-        if state == .perch {
-            perchedMicroBehavior()
-            return
-        }
-        guard state == .idle else { return }
-        // 站在平台上:沿平台走两步 / 偶尔跳去别的平台或跳下来 / 否则原地小动作。
-        if case .platform(let id) = supportSurface {
-            let roll = Double.random(in: 0..<1)
-            // 平台够长 → 45% 沿平台踱步(到端折返)
-            if roll < 0.45,
-               let plat = platforms.first(where: { $0.id == id }),
-               let r = platformOriginXRange(plat), r.max - r.min > 30 {
-                walkTargetX = CGFloat.random(in: r.min...r.max)
-                transition(to: .walk)
-                return
-            }
-            // 15% 跳去另一条平台(有多条时)
-            if roll < 0.60, platforms.count > 1,
-               let other = platforms.filter({ $0.id != id }).randomElement() {
-                setSupport(.platform(id: other.id))
-                transition(to: .flyingToPerch)
-                bird.setViewDirection(.side)
-                bird.flapWings(times: 12, fast: true)
-                return
-            }
-            // 10% 跳下平台(回到地板/下层平台)
-            if roll < 0.70 {
-                setSupport(nil)
-                bird.flapWings(times: 4, fast: true)
-                vel = CGVector(dx: CGFloat.random(in: -50...50), dy: 0)
-                bird.position.y = feetY
-                transition(to: .falling)
-                return
-            }
-            // 其余:原地小动作
-            switch Int.random(in: 0..<5) {
-            case 0: bird.setViewDirection(.side); bird.groomOnce()
-            case 1: bird.setViewDirection(.front); bird.peckOnce()
-            case 2:
-                bird.setViewDirection(.front)
-                bird.tiltHead(true)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in self?.bird.tiltHead(false) }
-            case 3: bird.setViewDirection(.front); bird.flapWings(times: 2)
-            default: bird.stretchOnce()
-            }
-            return
-        }
-        // 在房间地板上、且画了平台:25% 概率飞上去玩(站到某条平台上)。
-        if isInHome, supportSurface == nil, !platforms.isEmpty, Double.random(in: 0..<1) < 0.25 {
-            let target = platforms.randomElement()!
-            setSupport(.platform(id: target.id))
-            transition(to: .flyingToPerch)
-            bird.setViewDirection(.side)
-            bird.flapWings(times: 14, fast: true)
-            return
-        }
-        // 房间是用来看咕咕活动的空间:提高踱步频率,让走动明显可见(否则多被原地小动作淹没,
-        // 且 IdleSelector 在低精力时根本不 wander)。约 45% 直接踱步,其余仍走正常 idle 池。
-        if isInHome, Double.random(in: 0..<1) < 0.45 {
-            walkTargetX = randomGroundWalkTargetX(in: currentWorld)
-            transition(to: .walk)
-            return
-        }
-        let mood = idleMoodProvider?() ?? (energy: 0.7, valence: 0.15)
-        let move = idlePlayMoveProvider?()
-        let behavior = IdleSelector.choose(roll: Double.random(in: 0...1),
-                                           energy: mood.energy, valence: mood.valence,
-                                           availableMove: move)
+    /// 执行 IdleSelector 选出的一个 idle 行为。返回值 = 之后是否还顺带流露情绪符号
+    /// (in-home 的 wander 与"脱支撑失败"会提前收尾、不再冒符号——沿用旧逻辑)。
+    func runIdleMicro(_ behavior: IdleBehavior) -> Bool {
         switch behavior {
         case .wander:
             if isInHome {
                 // 房间里:踱步到较远一侧(到墙折返),与窝外"偶尔走动"同一套机制。
                 walkTargetX = randomGroundWalkTargetX(in: currentWorld)
                 transition(to: .walk)
-                return
+                return false
             }
-            guard !detachFromSupportBeforeGroundRelocation(.walk) else { return }
+            guard !detachFromSupportBeforeGroundRelocation(.walk) else { return false }
             let world = currentWorld
             let dx = CGFloat.random(in: -180...180)
             let target = max(world.minX, min(position.x + dx, world.maxX))
@@ -770,12 +757,16 @@ final class PetController: NSObject {
         case .standStill:
             break // just stand there, being a bird
         }
+        return true
+    }
 
-        // 行为之外,偶尔自发流露一下当下心情(开心冒心/哼唱、累了冒汗、还在气头上冒青筋)。
+    /// 行为之外偶尔自发流露当下心情(大多 nil,不刷屏)。
+    func showIdleManpuIfAny() {
         if let m = idleManpuProvider?() { bird.showManpu(m) }
     }
 
-    private func perchedMicroBehavior() {
+    /// 栖息时的小动作(由 PetBehaviorLoop 调度)。
+    func runPerchedMicro() {
         let roll = Double.random(in: 0...1)
         switch roll {
         case ..<0.34:
