@@ -11,7 +11,7 @@
 
 ## V2EX
 
-Status: blocked by login.
+Status: blocked by account activation.
 
 Visited:
 
@@ -19,7 +19,13 @@ Visited:
 https://www.v2ex.com/go/create
 ```
 
-Current browser state shows the user is not logged in; V2EX displays `注册` and `登录`.
+Current browser state shows the user logged in with Google but not activated. V2EX requires an invitation code or the Solana/V2EX token activation path on:
+
+```text
+https://www.v2ex.com/invite/activate
+```
+
+Do not use random leaked/sold invitation codes. Use a code from an existing V2EX member or the official token activation path.
 
 Suggested title:
 
@@ -84,3 +90,15 @@ Current browser state shows the Hacker News login/create-account page. Use the S
 - 即刻/朋友圈/技术群: use the short Chinese post in `docs/POSTS.md`.
 - Reddit: use the Reddit copy in `docs/POSTS.md` after login.
 - X/Twitter: use the X copy in `docs/POSTS.md` after login.
+
+## Browser Automation
+
+Status: blocked by Chrome extension setup.
+
+Chrome is running, but the selected Chrome profile does not have the Codex Chrome Extension installed/enabled. To continue browser-based posting from the logged-in browser session, install and enable:
+
+```text
+https://chromewebstore.google.com/detail/codex/hehggadaopoacecdllhhajmbjkdcmajg
+```
+
+After extension setup, resume from the X composer and replace the draft with the shorter X copy in `docs/POSTS.md`. Confirm with the owner immediately before clicking the final Post/Submit button on any third-party site.

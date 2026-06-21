@@ -122,11 +122,10 @@ GitHub: https://github.com/manwjh/gugu
 ## X / Twitter
 
 ```text
-I built Gugu, an AI desktop lifeform for macOS.
+Gugu: an AI desktop lifeform for macOS.
 
-Not a chatbot with a skin: a small bird that lives on your desktop, senses work rhythm, remembers, grows, and speaks at the right moment.
+A tiny bird that remembers, grows, and lives on your desktop.
 
-Source-first release:
 https://github.com/manwjh/gugu
 ```
 
