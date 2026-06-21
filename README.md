@@ -115,18 +115,13 @@ GUGU_HOME=/private/tmp/gugu-offline ./.build/debug/gugu --selftest-offline
 
 `--selftest-offline` 必须显式设置 `GUGU_HOME`,避免测试写入真实应用数据目录。
 
-## 发布资产
+## 发布图片
 
-生成首版演示视频和 GIF:
+Release 使用静态图片素材:
 
-```bash
-./scripts/make-demo-video.sh
-```
-
-输出:
-
-- `dist/gugu-demo-v2.3.0.mp4`
-- `dist/gugu-demo-v2.3.0.gif`
+- `dist/gugu-preview-v2.3.0.png`
+- `dist/gugu-front-v2.3.0.png`
+- `dist/gugu-side-v2.3.0.png`
 
 ## 架构
 

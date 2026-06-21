@@ -19,7 +19,7 @@
 
 - [ ] README 首屏能在 30 秒内讲清楚项目。
 - [ ] README 有清晰安装、模型配置、隐私说明、当前边界。
-- [ ] 录制 20-40 秒演示视频或 GIF。
+- [x] 准备静态发布图片,不用视频/GIF。
 - [x] 确认开源许可证。已添加 MIT `LICENSE`。
 - [x] 统一版本号。当前计划发布版本为 `v2.3.0`;`Info.plist` 已更新为 `CFBundleShortVersionString=2.3.0` / `CFBundleVersion=230`。
 - [ ] 跑通 `swift build`。
@@ -99,7 +99,7 @@ Release notes:
 
 - 掘金技术文章
 - 少数派投稿或短文
-- B 站/小红书/视频号短演示
+- B 站/小红书/视频号可以后续再做真实录屏,本次 Release 不附视频/GIF
 - Reddit `r/macapps`, `r/SideProject`
 - Hacker News `Show HN`
 
@@ -117,7 +117,7 @@ Release notes:
 ### Day 0
 
 - README、发布文案、Release notes 完成。
-- 录制演示视频。
+- 准备静态发布图片。
 - 本地验证构建和离线自测。
 - 确认许可证并补充 `LICENSE`。
 
@@ -136,7 +136,7 @@ Release notes:
 ### Day 4-7
 
 - 发 HN / Reddit / 更大中文社区。
-- 追加演示视频和用户反馈截图。
+- 追加真实截图和用户反馈。
 - 整理 roadmap,把真实反馈转成 issue。
 
 ## 风险与对策
@@ -145,7 +145,7 @@ Release notes:
 |---|---|---|
 | 用户不会配置模型 | 无法体验 | README 给最小 `config.yaml` 示例,首条 issue 收集 endpoint 适配问题 |
 | macOS Gatekeeper 阻拦 | 转化下降 | 明确当前是源码构建,暂不承诺公证安装包 |
-| 被理解成普通桌宠 | 传播弱 | 文案坚持“有节奏、有记忆、有边界”,视频展示主动择机开口 |
+| 被理解成普通桌宠 | 传播弱 | 文案坚持“有节奏、有记忆、有边界”,图片展示真实卡通质感 |
 | 隐私顾虑 | 不敢试 | 首屏放隐私承诺,摄像头/麦克风默认关闭写清楚 |
 | token 成本不清楚 | 用户担心 | 写明预算熔断和专注冻结 |
 

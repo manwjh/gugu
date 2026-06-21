@@ -12,11 +12,11 @@ Public launch release of Gugu, an AI desktop lifeform for macOS.
 - Proposal-gated local tools and auditable local state
 - MIT-licensed source release
 
-## Demo
+## Preview Images
 
-- MP4: `dist/gugu-demo-v2.3.0.mp4`
-- GIF: `dist/gugu-demo-v2.3.0.gif`
-- Regenerate with `./scripts/make-demo-video.sh`
+- `gugu-preview-v2.3.0.png`
+- `gugu-front-v2.3.0.png`
+- `gugu-side-v2.3.0.png`
 
 ## Current limitations
 
@@ -33,7 +33,7 @@ Before tagging:
 ```bash
 swift build
 GUGU_HOME=/private/tmp/gugu-launch-selftest ./.build/debug/gugu --selftest-offline
-./scripts/make-demo-video.sh
+test -s dist/gugu-preview-v2.3.0.png
 ```
 
 ## Suggested tag

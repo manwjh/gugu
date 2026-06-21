@@ -7,7 +7,9 @@
 ```bash
 swift build
 GUGU_HOME=/private/tmp/gugu-launch-selftest-final ./.build/debug/gugu --selftest-offline
-./scripts/make-demo-video.sh
+test -s dist/gugu-preview-v2.3.0.png
+test -s dist/gugu-front-v2.3.0.png
+test -s dist/gugu-side-v2.3.0.png
 ```
 
 ## 建议提交发布材料
@@ -21,8 +23,7 @@ git add \
   CHANGELOG.md \
   LICENSE \
   .github \
-  docs \
-  scripts/make-demo-video.sh
+  docs
 
 git commit -m "Prepare v2.3.0 public launch"
 ```
@@ -52,8 +53,9 @@ git push origin v2.3.0
 gh release create v2.3.0 \
   --title "Gugu v2.3.0 - public launch release" \
   --notes-file docs/RELEASE_NOTES_v2.3.0.md \
-  dist/gugu-demo-v2.3.0.mp4 \
-  dist/gugu-demo-v2.3.0.gif
+  dist/gugu-preview-v2.3.0.png \
+  dist/gugu-front-v2.3.0.png \
+  dist/gugu-side-v2.3.0.png
 ```
 
 如果默认分支不是 `main`,把上面的 `main` 改成实际分支名。
