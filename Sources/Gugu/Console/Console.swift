@@ -217,19 +217,19 @@ final class Console: NSObject {
         app?.pet.say(L.abilitiesSpeech)
     }
 
-    @objc func dancePet() { app?.pet.perform(action: "dance") }
+    @objc func dancePet() { app?.pet.perform(.dance) }
 
-    @objc func hopPet() { app?.pet.perform(action: "hop") }
+    @objc func hopPet() { app?.pet.perform(.hop) }
 
-    @objc func flyPet() { app?.pet.perform(action: "fly") }
+    @objc func flyPet() { app?.pet.perform(.fly) }
 
-    @objc func perchPet() { app?.pet.perform(action: "perch") }
+    @objc func perchPet() { app?.pet.perform(.goPerch) }
 
-    @objc func settlePet() { app?.pet.perform(action: "settle") }
+    @objc func settlePet() { app?.pet.perform(.settle) }
 
-    @objc func groomPet() { app?.pet.perform(action: "groom") }
+    @objc func groomPet() { app?.pet.perform(.groom) }
 
-    @objc func sleepPet() { app?.pet.perform(action: "sleep") }
+    @objc func sleepPet() { app?.pet.perform(.sleep) }
 
     /// 演一个学会的动作(菜单项用 representedObject 携带动作名)。
     @objc func performLearnedMoveItem(_ sender: NSMenuItem) {

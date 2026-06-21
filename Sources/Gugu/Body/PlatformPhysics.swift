@@ -12,7 +12,7 @@ extension PetController {
         platforms = newPlatforms
         if let id = supportSurface?.platformId,
            !newPlatforms.contains(where: { $0.id == id }) {
-            supportSurface = nil
+            setSupport(nil)
             perchCheckTimer?.invalidate()
             if state != .dragged {
                 bird.flapWings(times: 4, fast: true)
@@ -55,8 +55,8 @@ extension PetController {
     /// 返回离当前位置最近的平台(房间内有平台时用)
     func nearestPlatform() -> Platform? {
         guard let home = homeFrame, !platforms.isEmpty else { return nil }
-        let birdCenterX = window.frame.origin.x + winSize.width / 2
-        let birdCenterY = window.frame.origin.y + feetY
+        let birdCenterX = position.x + winSize.width / 2
+        let birdCenterY = position.y + feetY
         let normBird = CGPoint(x: (birdCenterX - home.minX) / home.width,
                                y: (birdCenterY - home.minY) / home.height)
         var nearest: Platform?

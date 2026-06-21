@@ -834,6 +834,33 @@ final class BirdNode: SKNode {
         run(.sequence([lean, .wait(forDuration: max(0, dur * 0.3)), back]), withKey: "walkLean")
     }
 
+    /// 持续行走脚步循环(状态机 walk/approach/retreat 用)。
+    /// **卡通小角色的脚法**:不做写实"钉地大步"(那会让脚甩出身体外),而是两脚在身下
+    /// 原位附近**小幅交替抬落**(march in place),左右错相;身体平移就让脚"滑"过去——
+    /// 卡通里这种滑步是标准做法。幅度小、脚始终贴在身下。`speed` 只用来调步频(走得快=踏得快)。
+    func startWalkCadence(speed: CGFloat) {
+        if footL.action(forKey: "walkStep") != nil { return }   // 已在走,别重起
+        let stepDur = max(0.10, min(0.18, 14 / max(1, speed)))  // ~0.16@90(walk) ~0.10@160(retreat)
+        // 一步:抬起+略向前(局部 +x=朝前),再落回原位。净位移 0 → 脚不漂移、不离身。
+        func step() -> SKAction {
+            let up = SKAction.moveBy(x: 2, y: 4, duration: stepDur / 2); up.timingMode = .easeOut
+            let down = SKAction.moveBy(x: -2, y: -4, duration: stepDur / 2); down.timingMode = .easeIn
+            return .sequence([up, down])
+        }
+        // 左右错相:一只抬时另一只在原位等(下一拍再抬)。
+        footL.run(.repeatForever(.sequence([step(), .wait(forDuration: stepDur)])), withKey: "walkStep")
+        footR.run(.repeatForever(.sequence([.wait(forDuration: stepDur), step()])), withKey: "walkStep")
+    }
+
+    /// 停止行走脚步,并把双脚归位到站立姿势(±6,0)。
+    func stopWalkCadence() {
+        guard footL.action(forKey: "walkStep") != nil || footR.action(forKey: "walkStep") != nil else { return }
+        footL.removeAction(forKey: "walkStep")
+        footR.removeAction(forKey: "walkStep")
+        footL.run(.move(to: CGPoint(x: -6, y: 0), duration: 0.1))
+        footR.run(.move(to: CGPoint(x: 6, y: 0), duration: 0.1))
+    }
+
     /// Stretch: a brief squash-then-stretch with a small wing lift, like a yawny stretch.
     func stretchOnce() {
         run(.sequence([
