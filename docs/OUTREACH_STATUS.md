@@ -4,6 +4,8 @@
 
 - GitHub Release is live: https://github.com/manwjh/gugu/releases/tag/v2.3.0
 - Early feedback issue is live: https://github.com/manwjh/gugu/issues/1
+- GitHub launch discussion is live: https://github.com/manwjh/gugu/discussions/2
+- Media kit is available: https://github.com/manwjh/gugu/blob/main/docs/MEDIA_KIT.md
 - Release assets are static PNG images only:
   - https://github.com/manwjh/gugu/releases/download/v2.3.0/gugu-preview-v2.3.0.png
   - https://github.com/manwjh/gugu/releases/download/v2.3.0/gugu-front-v2.3.0.png

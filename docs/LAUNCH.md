@@ -17,17 +17,17 @@
 
 ## 发布前检查
 
-- [ ] README 首屏能在 30 秒内讲清楚项目。
-- [ ] README 有清晰安装、模型配置、隐私说明、当前边界。
+- [x] README 首屏能在 30 秒内讲清楚项目。
+- [x] README 有清晰安装、模型配置、隐私说明、当前边界。
 - [x] 准备静态发布图片,不用视频/GIF。
 - [x] 确认开源许可证。已添加 MIT `LICENSE`。
 - [x] 统一版本号。当前计划发布版本为 `v2.3.0`;`Info.plist` 已更新为 `CFBundleShortVersionString=2.3.0` / `CFBundleVersion=230`。
-- [ ] 跑通 `swift build`。
-- [ ] 跑通 `GUGU_HOME=/private/tmp/gugu-offline ./.build/debug/gugu --selftest-offline`。
-- [ ] 用全新临时数据目录启动一次,确认首次配置路径没有误导。
-- [ ] 确认 GitHub repo description 和 topics。
-- [ ] 创建下一个 GitHub Release。当前已有 tag: `v2.1.0`, `v2.2.0`;建议公开发布用 `v2.3.0`。
-- [ ] 置顶一个反馈 issue:安装问题、模型配置、隐私顾虑、交互建议。
+- [x] 跑通 `swift build`。
+- [x] 跑通 `GUGU_HOME=/private/tmp/gugu-launch-selftest-20260621-final ./.build/debug/gugu --selftest-offline`。
+- [x] 用全新临时数据目录启动一次,确认首次配置路径没有误导。
+- [x] 确认 GitHub repo description 和 topics。
+- [x] 创建公开发布 Release: `v2.3.0`。
+- [x] 创建反馈 issue:安装问题、模型配置、隐私顾虑、交互建议。
 
 ## GitHub 设置建议
 

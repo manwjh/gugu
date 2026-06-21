@@ -144,8 +144,10 @@ L4 梦境  dream        每晚整理记忆、生长技能、结算成长
 
 ## 发布与反馈
 
+- GitHub Discussion: [Gugu v2.3.0: an AI desktop lifeform for macOS](https://github.com/manwjh/gugu/discussions/2)
 - 发布计划: [docs/LAUNCH.md](docs/LAUNCH.md)
 - 可复制发布文案: [docs/POSTS.md](docs/POSTS.md)
+- Media kit: [docs/MEDIA_KIT.md](docs/MEDIA_KIT.md)
 - FAQ: [docs/FAQ.md](docs/FAQ.md)
 - Release notes: [docs/RELEASE_NOTES_v2.3.0.md](docs/RELEASE_NOTES_v2.3.0.md)
 - 发布命令清单: [docs/PUBLISH_COMMANDS.md](docs/PUBLISH_COMMANDS.md)
