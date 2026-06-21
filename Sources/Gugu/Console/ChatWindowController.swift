@@ -160,6 +160,11 @@ final class ChatWindowController: NSObject, NSWindowDelegate {
             setChatLoading(false)
             return
         }
+        if app.modules.module(BlogModule.self)?.handleTrigger(text) == true {
+            app.console?.refreshMenu()
+            setChatLoading(false)
+            return
+        }
         Task {
             defer { setChatLoading(false) }
             do {

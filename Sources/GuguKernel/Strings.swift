@@ -31,6 +31,11 @@ package enum L {
     package static var menuTooltip: String { s("咕咕", "Gugu") }
     package static var menuAccessibility: String { s("咕咕菜单", "Gugu Menu") }
     package static var menuChat: String { s("和咕咕说话…", "Talk to Gugu…") }
+    package static var menuWriteBlog: String { s("写一篇心流记录", "Write today's entry") }
+    package static var menuOpenBlog: String { s("翻看心流记录", "Open the journal") }
+    package static var blogWriting: String { s("我来写写今天…", "Let me write about today…") }
+    package static var blogDone: String { s("写好啦", "Done!") }
+    package static var blogFailed: String { s("没写成…", "Couldn't write it…") }
     package static var menuPoke: String { s("戳一下", "Poke") }
     package static var menuHome: String { s("进入小窝", "Open Home") }
     package static var menuHomeClose: String { s("离开小窝", "Close Home") }

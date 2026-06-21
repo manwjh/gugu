@@ -34,10 +34,11 @@ package enum Paths {
     package static let snapshots  = root.appendingPathComponent("snapshots", isDirectory: true)
     package static let chatLog    = root.appendingPathComponent("chat.jsonl")
     package static let logFile    = root.appendingPathComponent("gugu.log")
+    package static let blogDir    = root.appendingPathComponent("blog", isDirectory: true)
 
     package static func bootstrap() throws {
         let fm = FileManager.default
-        for dir in [root, memoryDir, skillsDir, movesDir, eventsDir, modelsDir, auditDir, proposals, snapshots] {
+        for dir in [root, memoryDir, skillsDir, movesDir, eventsDir, modelsDir, auditDir, proposals, snapshots, blogDir] {
             try fm.createDirectory(at: dir, withIntermediateDirectories: true)
         }
         if !fm.fileExists(atPath: pinnedMemory.deletingLastPathComponent().path) {

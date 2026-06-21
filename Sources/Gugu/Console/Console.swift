@@ -72,6 +72,10 @@ final class Console: NSObject {
         let approve = makeItem(L.menuApproveNext, #selector(approveNextProposal), "", icon: "checkmark.seal")
         approve.isEnabled = !Evolution(memory: Memory()).pendingProposals().isEmpty
         menu.addItem(approve)
+        if app?.config.moduleBlogEnabled == true {
+            menu.addItem(makeItem(L.menuWriteBlog, #selector(writeBlogNow), "", icon: "square.and.pencil"))
+            menu.addItem(makeItem(L.menuOpenBlog, #selector(openBlog), "", icon: "book"))
+        }
         menu.addItem(makeItem(L.menuOpenConfig, #selector(openConfigDir), "", icon: "folder"))
         menu.addItem(makeItem(L.menuSettings, #selector(openSettings), ",", icon: "gearshape"))
         menu.addItem(.separator())
@@ -230,6 +234,10 @@ final class Console: NSObject {
     @objc func groomPet() { app?.pet.perform(.groom) }
 
     @objc func sleepPet() { app?.pet.perform(.sleep) }
+
+    @objc func writeBlogNow() { app?.modules.module(BlogModule.self)?.writeToday() }
+
+    @objc func openBlog() { app?.modules.module(BlogModule.self)?.openJournal() }
 
     /// 演一个学会的动作(菜单项用 representedObject 携带动作名)。
     @objc func performLearnedMoveItem(_ sender: NSMenuItem) {

@@ -94,6 +94,11 @@ package struct Config {
     /// 联网搜索权限。框架就绪但默认关、且当前只记录请求不真正出网(见 LocalToolExecutor)。
     package var toolWebSearch: Bool
 
+    /// 实验模块:blog——咕咕以助理视角写日志,本地生成 md+html。默认关。
+    package var moduleBlogEnabled: Bool
+    /// blog 局域网访问:只读静态服务,仅同一局域网设备可见。默认关(开前知道暴露面)。
+    package var blogLanEnabled: Bool
+
     package var petName: String
 
     /// UI language: "en" or "zh". Default "en".
@@ -117,6 +122,8 @@ package struct Config {
             toolReminders: y.bool("tools.reminders", false),
             toolLocalNotifications: y.bool("tools.local_notifications", false),
             toolWebSearch: y.bool("tools.web_search", false),
+            moduleBlogEnabled: y.bool("modules.blog", false),
+            blogLanEnabled: y.bool("modules.blog_lan", false),
             petName: y.str("pet.name", "咕咕"),
             language: y.str("pet.language", "en")
         )
@@ -157,6 +164,10 @@ package struct Config {
               reminders: false         # 高阶能力,必须经 proposals 批准
               local_notifications: false # 系统通知,必须经 proposals 批准
               web_search: false        # 联网搜索(框架就绪;当前只记录请求,尚未真正出网)
+
+            modules:
+              blog: false              # 实验模块:咕咕以助理视角写日志(本地生成 md+html)
+              blog_lan: false          # blog 局域网访问(只读,仅同一 WiFi 可见;开前知道暴露面)
             """
             try cfg.write(to: Paths.config, atomically: true, encoding: .utf8)
         }

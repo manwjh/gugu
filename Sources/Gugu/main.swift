@@ -19,6 +19,8 @@ final class GuguApp: NSObject, NSApplicationDelegate {
     var scheduler: Scheduler!
     var console: Console!
     var visionDebug: VisionDebugWindow!
+    /// 实验模块注册表(blog 等;按 config 开关激活)。
+    var modules: ModuleRegistry!
     private var minuteTimer: Timer?
     private var perceptionTimer: Timer?
 
@@ -49,6 +51,12 @@ final class GuguApp: NSObject, NSApplicationDelegate {
         home.onFrameChange = { [weak self] frame in self?.pet.updateHomeFrame(frame) }
         home.onPlatformsChange = { [weak self] platforms in self?.pet.updatePlatforms(platforms) }
         console = Console(app: self)
+        // 实验模块:经窄接口 ModuleContext 接入,按 config 开关激活(blog 默认关)。
+        modules = ModuleRegistry(context: ModuleContext(
+            config: config, brain: brain,
+            announce: { [weak self] text in self?.pet.say(text) }))
+        modules.register(BlogModule())
+        modules.sync(config: config)
         visionDebug = VisionDebugWindow()
         visionDebug.previewProvider = { [weak self] in self!.visionSensor.makePreviewLayer() }
         pet.onStateChange = { [weak self] _ in
@@ -319,6 +327,7 @@ final class GuguApp: NSObject, NSApplicationDelegate {
             return
         }
         if tryStartLearnMove(trimmed) { return }
+        if modules.module(BlogModule.self)?.handleTrigger(trimmed) == true { return }
         Task { [weak self] in
             guard let self else { return }
             do {
@@ -514,6 +523,8 @@ final class GuguApp: NSObject, NSApplicationDelegate {
                             && self.rhythmSensor.rhythm != .away {
                     self.pet.wake()
                 }
+                // 心流记录:傍晚之后、当天没写过 → 自动写一篇(模块内部判定与去重)。
+                self.modules.module(BlogModule.self)?.tickNightly()
             }
         }
         RunLoop.main.add(minuteTimer!, forMode: .common)
@@ -593,6 +604,7 @@ final class GuguApp: NSObject, NSApplicationDelegate {
         screenSensor.updateBlacklist(config.blacklistApps)
         scheduler.updateConfig(config)   // 推新 config + 同步 mtime 基线(不重复触发)
         refreshGrowthState()             // budget + pet + menu
+        modules.sync(config: config)     // 模块开关热重载(开/关 blog 等)
         Log.info("config", L.configReloaded)
     }
 }
@@ -603,6 +615,8 @@ final class GuguApp: NSObject, NSApplicationDelegate {
 @MainActor
 enum AppLifetime {
     static var retainedDelegate: GuguApp?
+    /// 保活 --blog-demo 的服务器(否则出了闭包作用域就被释放,端口还在但 handler 失效)。
+    static var blogServer: BlogLANServer?
 }
 
 let args = CommandLine.arguments
@@ -673,6 +687,60 @@ if args.contains("--selftest") {
         DispatchQueue.main.async { runRender(pose: pose, to: path) }
     }
     app.run()
+} else if args.contains("--blog-demo") {
+    // 演示:用真实的 BlogRenderer + BlogStore + BlogLANServer 生成一篇示例日志并起局域网服务。
+    // 不调 LLM(正文是示例),只为让你直接在浏览器看到这套本地 blog 长什么样。
+    MainActor.assumeIsolated {
+        let posts: [(Int, String)] = [
+            (0, """
+            # 今天,主人重写了我的身体
+
+            主人埋头改了一整天,把我"在哪、怎么走、怎么落地"这些重新理顺了。我在桌面上来回踱步,偶尔停下理理毛、看他敲键盘。
+
+            傍晚他说:给你做个能写日记的本事吧。于是就有了你正看着的这一页——以后这里会记下我们一起过的日子。
+
+            - 新学会:把一天写成一篇,生成网页
+            - 还惦记:配一张我自己拍的照片(下次)
+
+            **咕。** 今天很安稳。
+            """),
+            (1, """
+            # 学会了好好走路
+
+            以前我走起来脚是飘的。今天主人给我加了真正的脚步——一左一右,踩着地面。我特意在屏幕最下边来回走了好几趟,看自己的影子。
+
+            走到墙角会自己回头,不会再傻乎乎撞出去了。
+            """),
+            (2, """
+            # 第一次飞到窗户上
+
+            主人开着一个窗口,我扑棱扑棱飞上去,稳稳停在了顶上。从那儿看他写东西,视角不太一样。
+
+            待久了有点困,就把头埋进翅膀里打了个盹。
+            """),
+        ]
+        var firstHTML = "index.html"
+        do {
+            for (back, md) in posts {
+                let date = Date().addingTimeInterval(TimeInterval(-86_400 * back))
+                let saved = try BlogStore.save(BlogPost(date: date, markdown: md))
+                if back == 0 { firstHTML = saved.html.lastPathComponent }
+            }
+            BlogStore.rebuildIndex()
+            let server = BlogLANServer(directory: Paths.blogDir, port: 8420)
+            try server.start()
+            AppLifetime.blogServer = server   // 保活,否则出闭包即释放、handler 失效
+            print("✅ 咕咕的本地 blog 已启动:")
+            print("   本机:    http://localhost:8420")
+            print("   局域网:  \(server.url)")
+            print("   最新一篇:http://localhost:8420/\(firstHTML)")
+            print("   (Ctrl-C 停止)")
+        } catch {
+            print("blog demo 启动失败: \(error)")
+            exit(1)
+        }
+    }
+    RunLoop.main.run()
 } else {
     MainActor.assumeIsolated {
         let app = NSApplication.shared

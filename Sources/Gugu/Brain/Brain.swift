@@ -342,6 +342,49 @@ final class Brain {
         }
     }
 
+    // MARK: - Blog(实验模块用:以助理视角写一篇日志)
+
+    /// 根据 blog 模块给的"今天素材",叠加咕咕的记忆/成长背景,生成一篇 markdown 日志。
+    /// 复用与 chat/dream 同一条 LLM 通道与预算计费;只产出 markdown 正文。
+    func writeBlog(material: String) async throws -> String {
+        let blogSchema: [String: Any] = [
+            "type": "object",
+            "properties": ["body": ["type": "string", "description": "blog 正文,markdown"]],
+            "required": ["body"],
+            "additionalProperties": false,
+        ]
+        let prompt = """
+        你是主人的桌面小助理咕咕。请以助理视角,根据下面今天的素材,写一篇简短的中文日志(blog)。
+        要求:markdown 格式;开头一个 # 标题;150–300 字;贴着真实素材写、不编造没发生的事;
+        语气是你这只小鸟的口吻,温和不浮夸。只输出 blog 正文。
+
+        背景(主人看不到):\(Brain.growthContext())
+        你的记忆梗概:\(memory.digest())
+
+        今天的素材:
+        \(material)
+        """
+        let reply = try await client.create(
+            model: config.modelId,
+            maxTokens: 1500,
+            system: systemPrompt,
+            messages: [["role": "user", "content": prompt]],
+            schema: blogSchema,
+            policy: .dream
+        )
+        budget.record(inputChars: systemPrompt.count + prompt.count,
+                      outputChars: reply.text.count, label: "blog")
+        if let data = Brain.extractJSON(reply.text)?.data(using: .utf8),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let body = (obj["body"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !body.isEmpty {
+            return body
+        }
+        let raw = reply.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty else { throw LLMError.empty("blog 内容为空") }
+        return raw
+    }
+
     // MARK: - 动作学习(动作进化:把主人的口头要求翻译成元动作编排)
 
     /// 单步编排的 schema:op 限定在白名单基元内,其余为可选参数。
