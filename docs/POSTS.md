@@ -11,6 +11,7 @@
 
 现在先开源给愿意从源码跑的 macOS 用户试试。
 
+官网: https://manwjh.github.io/gugu/
 GitHub: https://github.com/manwjh/gugu
 ```
 
@@ -33,6 +34,7 @@ GitHub: https://github.com/manwjh/gugu
 
 现在还不是面向所有人的成品安装包,更像是给开发者和愿意折腾的 macOS 用户的第一版公开源码。欢迎试用、提 issue,尤其欢迎反馈:你会不会愿意让这样一个小东西常驻在桌面上。
 
+官网: https://manwjh.github.io/gugu/
 GitHub: https://github.com/manwjh/gugu
 ```
 
@@ -59,6 +61,7 @@ GitHub: https://github.com/manwjh/gugu
 
 现在是第一版公开源码,主要适合愿意从源码运行的 macOS 用户。需要 macOS 14+、Swift 5.9+ 和一个 OpenAI Chat Completions 兼容模型接口。
 
+官网: https://manwjh.github.io/gugu/
 GitHub: https://github.com/manwjh/gugu
 
 我最想听到的反馈是:
@@ -94,6 +97,7 @@ Some design choices:
 
 It is currently a source-first release for developers and macOS users willing to build it locally. macOS 14+ and an OpenAI Chat Completions compatible endpoint are required.
 
+Website: https://manwjh.github.io/gugu/
 GitHub: https://github.com/manwjh/gugu
 ```
 
@@ -116,6 +120,7 @@ Privacy was a major design constraint: keyboard/mouse sensing only counts rhythm
 
 This is an early source-first release, not a polished signed app yet. It requires macOS 14+, Swift 5.9+, and an OpenAI-compatible model endpoint.
 
+Website: https://manwjh.github.io/gugu/
 GitHub: https://github.com/manwjh/gugu
 ```
 
@@ -126,7 +131,7 @@ Gugu: an AI desktop lifeform for macOS.
 
 A tiny bird that remembers, grows, and lives on your desktop.
 
-https://github.com/manwjh/gugu
+https://manwjh.github.io/gugu/
 ```
 
 ## GitHub Release Notes
