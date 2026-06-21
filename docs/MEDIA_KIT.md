@@ -11,6 +11,7 @@ Gugu is a source-first macOS project for an AI desktop lifeform. It is not a cha
 ## Links
 
 - GitHub: https://github.com/manwjh/gugu
+- Website: https://manwjh.github.io/gugu/
 - Release: https://github.com/manwjh/gugu/releases/tag/v2.3.0
 - Feedback: https://github.com/manwjh/gugu/issues/1
 
